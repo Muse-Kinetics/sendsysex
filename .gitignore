@@ -48,3 +48,15 @@ Thumbs.db
 *.mov
 *.wmv
 
+## User settings
+xcuserdata/
+
+## Xcode 8 and earlier
+*.xcscmblueprint
+*.xccheckout
+
+## trim build dirs
+build/Intermediates.noindex/
+build/MacOS/Products/Debug/
+*.dSYM
+
