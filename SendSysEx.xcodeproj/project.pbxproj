@@ -7,8 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		17E489A829D748C400140BB3 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 17E489A729D748C400140BB3 /* main.cpp */; };
-		17E489B029D7562000140BB3 /* RtMidi.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 17E489AF29D7562000140BB3 /* RtMidi.cpp */; };
+		178CD10529DC066200B806C4 /* SendSysEx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 178CD10429DC066200B806C4 /* SendSysEx.cpp */; };
+		178CD10B29DC086100B806C4 /* RtMidi.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 178CD10A29DC086100B806C4 /* RtMidi.cpp */; };
 		17E489B329D7583600140BB3 /* CoreMIDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 17E489B229D7583600140BB3 /* CoreMIDI.framework */; };
 		17E489B529D7584200140BB3 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 17E489B429D7584200140BB3 /* CoreAudio.framework */; };
 		17E489B729D7584800140BB3 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 17E489B629D7584800140BB3 /* CoreFoundation.framework */; };
@@ -27,10 +27,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		178CD10429DC066200B806C4 /* SendSysEx.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = SendSysEx.cpp; path = src/SendSysEx.cpp; sourceTree = SOURCE_ROOT; };
+		178CD10929DC086100B806C4 /* RtMidi.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = RtMidi.h; path = src/inc/rtmidi/RtMidi.h; sourceTree = SOURCE_ROOT; };
+		178CD10A29DC086100B806C4 /* RtMidi.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = RtMidi.cpp; path = src/inc/rtmidi/RtMidi.cpp; sourceTree = SOURCE_ROOT; };
 		17E489A429D748C400140BB3 /* SendSysEx */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = SendSysEx; sourceTree = BUILT_PRODUCTS_DIR; };
-		17E489A729D748C400140BB3 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
-		17E489AE29D7562000140BB3 /* RtMidi.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = RtMidi.h; path = inc/RtMidi.h; sourceTree = "<group>"; };
-		17E489AF29D7562000140BB3 /* RtMidi.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = RtMidi.cpp; path = inc/RtMidi.cpp; sourceTree = "<group>"; };
 		17E489B229D7583600140BB3 /* CoreMIDI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMIDI.framework; path = System/Library/Frameworks/CoreMIDI.framework; sourceTree = SDKROOT; };
 		17E489B429D7584200140BB3 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
 		17E489B629D7584800140BB3 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
@@ -70,9 +70,9 @@
 		17E489A629D748C400140BB3 /* SendSysEx */ = {
 			isa = PBXGroup;
 			children = (
-				17E489A729D748C400140BB3 /* main.cpp */,
-				17E489AF29D7562000140BB3 /* RtMidi.cpp */,
-				17E489AE29D7562000140BB3 /* RtMidi.h */,
+				178CD10A29DC086100B806C4 /* RtMidi.cpp */,
+				178CD10929DC086100B806C4 /* RtMidi.h */,
+				178CD10429DC066200B806C4 /* SendSysEx.cpp */,
 			);
 			path = SendSysEx;
 			sourceTree = "<group>";
@@ -144,8 +144,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				17E489B029D7562000140BB3 /* RtMidi.cpp in Sources */,
-				17E489A829D748C400140BB3 /* main.cpp in Sources */,
+				178CD10B29DC086100B806C4 /* RtMidi.cpp in Sources */,
+				178CD10529DC066200B806C4 /* SendSysEx.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

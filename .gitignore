@@ -56,7 +56,7 @@ xcuserdata/
 *.xccheckout
 
 ## trim build dirs
-build/Intermediates.noindex/
-build/MacOS/Products/Debug/
+build/MacOS/Intermediates.noindex/*
+build/MacOS/Products/Debug/*
 *.dSYM
 

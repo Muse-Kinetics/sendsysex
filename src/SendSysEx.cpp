@@ -7,7 +7,7 @@
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
-#include "inc/RtMidi.h"
+#include "RtMidi.h"
 
 #include <chrono>
 #include <thread>
@@ -25,19 +25,51 @@ enum
     FINISH_ERROR_OTHER
 };
 
+bool appRunning = true;
+bool verboseMode = false;
+
+RtMidiOut *midiout = 0;
+
 void invalidArguments()
 {
     fprintf(stderr,
-            "KMI Send SysEx Utility \n"
-            "Copyright © 2023 Keith McMillen Instruments. All rights reserved. \n"
+            "\nKMI Send SysEx Utility \n"
+            "Copyright (c) 2023 Keith McMillen Instruments. All rights reserved. \n"
             "Written by Eric Bateman. \n"
             "\n"
             "Standard usage: SendSysEx -p [Destination MIDI Port] -f [Source SysEx file]\n"
             "Example: SendSysEx BopPad BopPad.syx \n"
             "\n"
-            "Bootloader update method: SendSysEx -p [Destination MIDI Port] -b [Bootloader Port Name] -bc [enter bootloader SysEx file] -f [Source SysEx file]\n"
+            "Bootloader update method: SendSysEx -p [Destination MIDI Port] -b [Bootloader Port Name] -t [time to wait for bootloader port] adob-bc [enter bootloader SysEx file] -f [Source SysEx file]\n"
+            "\n"
+            "Use flag -v for verbose mode.\n"
             );
 }
+
+// get MIDI port number matching port name
+int getPortNumber(string findPortName)
+{ 
+    string thisPortName;
+    int numOutPorts = midiout->getPortCount();
+
+    int thisOutPortNum = -1;
+    for (int i = 0; i < numOutPorts; i++)
+    {
+        thisPortName = midiout->getPortName(i);
+        
+        if (verboseMode)
+        {
+            cout << "MIDI Output Port detected: " << thisPortName << "\n";
+        }
+        
+        if (thisPortName == findPortName)
+        {
+            thisOutPortNum = i;
+        }
+    }
+    return thisOutPortNum;
+}
+
 
 int main(int argc, const char * argv[])
 {
@@ -53,29 +85,35 @@ int main(int argc, const char * argv[])
     char *appPortName;
     long syxFileSize = 0;
     FILE *syxFile;
-    char *syxFilePath;
+    char *syxFilePath = NULL;
     std::vector<unsigned char> sysexPayload;
     
-    string thisPortName;
+    string thisPortName, targetPortName;
     string thisArg;
     
     bool enterBootloaderMode = false;
     unsigned char bootLoaderTimeout = 1;
     int appState = APP_INIT;
-    bool appRunning = true;
-    
-    RtMidiOut *midiout = 0;
 
     int i, numOutPorts, thisOutPortNum;
     unsigned char syxByte;
     
+    // RtMidiOut constructor
+    try {
+        midiout = new RtMidiOut();
+    }
+    catch ( RtMidiError &error ) {
+        error.printMessage();
+        appState = FINISH_ERROR_OTHER;
+    }
+
     // Parse arguments
     if (argc > 1)
     {
         // load arguments
-        for (int i = 1; i < argc; ++i)
+        for (int i = 1; i < argc; i++)
         {
-            cout << "argument " << i << " : " << (char *)argv[i];
+            //cout << "argument " << i << " : " << (char *)argv[i];
             thisArg = argv[i];
             if (thisArg == "-p" && argc > i)
             {
@@ -98,12 +136,23 @@ int main(int argc, const char * argv[])
             {
                 bootLoaderTimeout = strtol(argv[i++ + 1], nullptr, 0);
             }
+            else if (thisArg == "-v")
+            {
+                verboseMode = true;
+                thisOutPortNum = getPortNumber(""); // list ports
+            }
             else
             {
                 invalidArguments();
                 return 0;
             }
-            printf(" argument %d: %s\n", i, argv[i]);
+            //printf(" argument %d: %s\n", i, argv[i]);
+        }
+        
+        if (syxFilePath == NULL)
+        {
+            cout << "ERROR: No SysEx File Specified!";
+            return 0;
         }
         
         // bootloader
@@ -182,17 +231,6 @@ int main(int argc, const char * argv[])
         return 0;
     }
     
-    
-    // RtMidiOut constructor
-    try {
-        midiout = new RtMidiOut();
-    }
-    catch ( RtMidiError &error ) {
-        error.printMessage();
-        appState = FINISH_ERROR_OTHER;
-    }
-    
-    
     // MAIN LOOP
     while (appRunning)
     {
@@ -210,15 +248,7 @@ int main(int argc, const char * argv[])
                     break;
                 }
                 
-                thisOutPortNum = -1;
-                for (i = 0; i < numOutPorts; i++)
-                {
-                    if (midiout->getPortName(i) == appPortName) // enter bootloader message goes to the app port
-                    {
-                        thisOutPortNum = i;
-                    }
-                }
-                
+                thisOutPortNum = getPortNumber(targetPortName);
                 if (thisOutPortNum == -1)
                 {
                     cout << "Error: MIDI output port \"" << appPortName << "\" not found!\n";
@@ -262,19 +292,8 @@ int main(int argc, const char * argv[])
             case WAIT_BOOTLOADER:
                 cout << "Waiting " << to_string(bootLoaderTimeout) << " second(s) for Bootloader port...\n";
                 sleep_for(seconds(bootLoaderTimeout)); // putting this here to give midi system time before running the first check
-                // get MIDI port number matching port name
-                numOutPorts = midiout->getPortCount();
                 
-                thisOutPortNum = -1;
-                for (i = 0; i < numOutPorts; i++)
-                {
-                    if (midiout->getPortName(i) == bootloaderPortName)
-                    {
-                        thisOutPortNum = i;
-                    }
-                }
-                
-                if (thisOutPortNum > -1)
+                if (getPortNumber(bootloaderPortName) > -1)
                 {
                     cout << "Found bootloader port: " << bootloaderPortName << "\n";
                     appState = SEND_FIRMWARE;
@@ -301,25 +320,17 @@ int main(int argc, const char * argv[])
                 // select name based on wether we are entering bootloader mode or not
                 if (enterBootloaderMode)
                 {
-                    thisPortName = bootloaderPortName;
+                    targetPortName = bootloaderPortName;
                 }
                 else
                 {
-                    thisPortName = appPortName;
+                    targetPortName = appPortName;
                 }
                 
-                thisOutPortNum = -1;
-                for (i = 0; i < numOutPorts; i++)
-                {
-                    if (midiout->getPortName(i) == thisPortName)
-                    {
-                        thisOutPortNum = i;
-                    }
-                }
-                
+                thisOutPortNum = getPortNumber(targetPortName);
                 if (thisOutPortNum == -1)
                 {
-                    cout << "Error: MIDI output port \"" << thisPortName << "\" not found!\n";
+                    cout << "Error: MIDI output port \"" << targetPortName << "\" not found!\n";
                     appState = FINISH_ERROR_OTHER;
                 }
                 
@@ -340,7 +351,7 @@ int main(int argc, const char * argv[])
                     appState = FINISH_ERROR_OTHER;
                 }
                 
-                cout << "Successfully sent \"" << syxFilePath << "\" to MIDI OUT port: " << thisPortName << ", size: " << syxFileSize << " bytes.\n";
+                cout << "Successfully sent \"" << syxFilePath << "\" to MIDI OUT port: " << targetPortName << ", size: " << syxFileSize << " bytes.\n";
                 appState = FINISH_NO_ERR;
                 
                 break;

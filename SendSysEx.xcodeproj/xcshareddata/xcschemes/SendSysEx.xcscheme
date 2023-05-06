@@ -52,8 +52,12 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "-p &quot;BopPad&quot; -b &quot;BopPad Bootloader&quot; -t 5 -bc &quot;/Users/EricB/KMI Dropbox/Eric Bateman/00_Firmware/_syx Library/BopPad/BopPad_loadBootloader_short.syx&quot; -f &quot;/Users/EricB/KMI Dropbox/Eric Bateman/00_Firmware/BopPad/Keil/BopPad.syx&quot;"
+            argument = "-v -p &quot;BopPad&quot; -b &quot;BopPad Bootloader&quot; -t 5 -bc &quot;/Users/EricB/KMI Dropbox/Eric Bateman/00_Firmware/_syx Library/BopPad/BopPad_loadBootloader_short.syx&quot; -f &quot;/Users/EricB/KMI Dropbox/Eric Bateman/00_Firmware/BopPad/Keil/BopPad.syx&quot;"
             isEnabled = "YES">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "-v"
+            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
