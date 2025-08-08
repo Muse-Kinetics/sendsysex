@@ -13,6 +13,12 @@
 #include <thread>
 
 
+
+#define MAX_MIDI_SYSEX_SIZE 250000 // reject payloads larger than this, also prevents buffer overflow
+
+#define MIDI_SX_START 0xF0
+#define MIDI_SX_STOP 0xF7
+
 using namespace std;
 
 enum
@@ -21,30 +27,26 @@ enum
     ENTER_BOOTLOADER,
     WAIT_BOOTLOADER,
     SEND_FIRMWARE,
+    FW_SENT_WAIT,
     FINISH_NO_ERR,
     FINISH_ERROR_OTHER
 };
 
 bool appRunning = true;
 bool verboseMode = false;
+int appState = APP_INIT;
 
 RtMidiOut *midiout = 0;
 
-void invalidArguments()
-{
-    fprintf(stderr,
-            "\nKMI Send SysEx Utility \n"
-            "Copyright (c) 2023 Keith McMillen Instruments. All rights reserved. \n"
-            "Written by Eric Bateman. \n"
-            "\n"
-            "Standard usage: SendSysEx -p [Destination MIDI Port] -f [Source SysEx file]\n"
-            "Example: SendSysEx BopPad BopPad.syx \n"
-            "\n"
-            "Bootloader update method: SendSysEx -p [Destination MIDI Port] -b [Bootloader Port Name] -t [time to wait for bootloader port] adob-bc [enter bootloader SysEx file] -f [Source SysEx file]\n"
-            "\n"
-            "Use flag -v for verbose mode.\n"
-            );
-}
+std::vector<unsigned char> packet; // the midi TX buffer, put outgoing midi messages here to transmit them
+
+unsigned int sysExTxChunkSize = 48; // this is equivalent to 16 USB MIDI messages, or a full USB MIDI packet 
+unsigned int sysExTxChunkDelay = 2; // limit sysex to one packet per 1ms
+
+auto syxExTxChunkTimer = std::chrono::high_resolution_clock::now();
+auto timeNow = std::chrono::high_resolution_clock::now();
+
+void slotEmptyMIDIBuffer();
 
 // get MIDI port number matching port name
 int getPortNumber(string findPortName)
@@ -70,6 +72,27 @@ int getPortNumber(string findPortName)
     return thisOutPortNum;
 }
 
+void invalidArguments()
+{
+    fprintf(stderr,
+            "\nKMI Send SysEx Utility \n"
+            "Copyright (c) 2023 Keith McMillen Instruments. All rights reserved. \n"
+            "Written by Eric Bateman. \n"
+            "\n"
+            "Standard usage: SendSysEx -p [Destination MIDI Port Number] -f [Source SysEx file]\n"
+            "Example: SendSysEx BopPad BopPad.syx \n"
+            "\n"
+            "Bootloader update method: SendSysEx -p [Destination MIDI Port Number] -b [Bootloader Port Name] -t [time to wait for bootloader port]  -bc [enter bootloader SysEx file] -f [Source SysEx file]\n"
+            "\n"
+            "Use flag -l to list ports.\n"
+            );
+
+    verboseMode = true;
+    int listPorts = getPortNumber(""); // list ports
+}
+
+
+
 
 int main(int argc, const char * argv[])
 {
@@ -83,6 +106,7 @@ int main(int argc, const char * argv[])
     std::vector<unsigned char> blCommandPayload;
     
     char *appPortName;
+    char *appPortNum;
     long syxFileSize = 0;
     FILE *syxFile;
     char *syxFilePath = NULL;
@@ -92,10 +116,11 @@ int main(int argc, const char * argv[])
     string thisArg;
     
     bool enterBootloaderMode = false;
+    bool useOnePortNumber = false;
     unsigned char bootLoaderTimeout = 1;
-    int appState = APP_INIT;
 
-    int i, numOutPorts, thisOutPortNum;
+    int i, numOutPorts;
+    int thisOutPortNum = -1;
     unsigned char syxByte;
     
     // RtMidiOut constructor
@@ -115,9 +140,16 @@ int main(int argc, const char * argv[])
         {
             //cout << "argument " << i << " : " << (char *)argv[i];
             thisArg = argv[i];
-            if (thisArg == "-p" && argc > i)
+            if (thisArg == "-n" && i + 1 < argc)
             {
-                appPortName = (char *)argv[i++ + 1];
+                appPortName = (char *)argv[++i];
+                std::cout << "Port Name: " << appPortName << "\n";
+            }
+            else if (thisArg == "-p" && i + 1 < argc)
+            {
+                useOnePortNumber = true;
+                thisOutPortNum = std::atoi(argv[++i]); // Increment i and convert to int
+                std::cout << "Using port: " << thisOutPortNum << "\n";
             }
             else if (thisArg == "-f" && argc > i)
             {
@@ -136,7 +168,7 @@ int main(int argc, const char * argv[])
             {
                 bootLoaderTimeout = strtol(argv[i++ + 1], nullptr, 0);
             }
-            else if (thisArg == "-v")
+            else if (thisArg == "-l")
             {
                 verboseMode = true;
                 thisOutPortNum = getPortNumber(""); // list ports
@@ -158,6 +190,7 @@ int main(int argc, const char * argv[])
         // bootloader
         if (enterBootloaderMode)
         {
+            cout << "Bootloader + firmware mode\n";
             if (blCommandFilePath == NULL)
             {
                 cout << "ERROR: No enter-bootloader command specified\n";
@@ -192,6 +225,7 @@ int main(int argc, const char * argv[])
         }
         else
         {
+             cout << "Firmware only mode\n";
             appState = SEND_FIRMWARE;
         }
         
@@ -234,10 +268,20 @@ int main(int argc, const char * argv[])
     // MAIN LOOP
     while (appRunning)
     {
+        timeNow = std::chrono::high_resolution_clock::now();
+        unsigned int duration = std::chrono::duration_cast<std::chrono::milliseconds>(timeNow - syxExTxChunkTimer).count();
+
+        if (duration > sysExTxChunkDelay)
+        {
+            syxExTxChunkTimer = std::chrono::high_resolution_clock::now();
+            slotEmptyMIDIBuffer();
+        }
+
+        //cout << "Execute App State: " << appState << "\n";
         switch (appState)
         {
             case ENTER_BOOTLOADER:
-                
+                cout << "Enter bootloader\n";
                 // get MIDI port number matching port name
                 numOutPorts = midiout->getPortCount();
                 
@@ -248,7 +292,7 @@ int main(int argc, const char * argv[])
                     break;
                 }
                 
-                thisOutPortNum = getPortNumber(targetPortName);
+                thisOutPortNum = useOnePortNumber ? getPortNumber(targetPortName) : thisOutPortNum;
                 if (thisOutPortNum == -1)
                 {
                     cout << "Error: MIDI output port \"" << appPortName << "\" not found!\n";
@@ -257,19 +301,23 @@ int main(int argc, const char * argv[])
                 }
                 
                 // Attempt to open midi output
+                cout << "Opening port: " << thisOutPortNum << "\n";
                 try {
                     midiout->openPort(thisOutPortNum);
                 }
                 catch ( RtMidiError &error ) {
+                    cout << "**ERROR**\n";
                     error.printMessage();
                     appState = FINISH_ERROR_OTHER;
                     break;
                 }
                 
+                cout << "Sending Bootloader image/command to port: " << thisOutPortNum << "\n";
                 try {
                     midiout->sendMessage( &blCommandPayload );
                 }
                 catch ( RtMidiError &error ) {
+                    cout << "**ERROR**\n";
                     error.printMessage();
                     appState = FINISH_ERROR_OTHER;
                     break;
@@ -281,6 +329,7 @@ int main(int argc, const char * argv[])
                     midiout->closePort();
                 }
                 catch ( RtMidiError &error ) {
+                    cout << "**ERROR**\n";
                     error.printMessage();
                     appState = FINISH_ERROR_OTHER;
                     break;
@@ -311,54 +360,78 @@ int main(int argc, const char * argv[])
                 // get MIDI port number matching port name
                 numOutPorts = midiout->getPortCount();
                 
+                cout << "Send Firmware - numOutPorts: " << numOutPorts << "\n";
+
                 if (numOutPorts < 1)
                 {
                     cout << "Error: no MIDI output ports available\n";
                     appState = FINISH_ERROR_OTHER;
+                    break;
                 }
                 
-                // select name based on wether we are entering bootloader mode or not
-                if (enterBootloaderMode)
-                {
-                    targetPortName = bootloaderPortName;
-                }
-                else
-                {
-                    targetPortName = appPortName;
-                }
+                // cout << "enterBootloaderMode: " << enterBootloaderMode << "\n";
+
+                // // select name based on wether we are entering bootloader mode or not
+                // if (enterBootloaderMode)
+                // {
+                //     cout << "1\n";
+                //     targetPortName = bootloaderPortName;
+                // }
+                // else
+                // {
+                //     cout << "2\n";
+                //     targetPortName = appPortName;
+                // }
+
+                cout << "3\n";
                 
-                thisOutPortNum = getPortNumber(targetPortName);
+                cout << "thisOutPortNum: " << thisOutPortNum << "\n";
+
+                thisOutPortNum = useOnePortNumber ? thisOutPortNum : getPortNumber(targetPortName);
                 if (thisOutPortNum == -1)
                 {
                     cout << "Error: MIDI output port \"" << targetPortName << "\" not found!\n";
                     appState = FINISH_ERROR_OTHER;
+                    break;
                 }
                 
+                cout << "Opening port: " << thisOutPortNum << "\n";
                 // Attempt to open midi output
                 try {
                     midiout->openPort(thisOutPortNum);
                 }
                 catch ( RtMidiError &error ) {
+                    cout << "**ERROR**\n";
                     error.printMessage();
                     appState = FINISH_ERROR_OTHER;
+                    break;
                 }
-                
-                try {
-                    midiout->sendMessage( &sysexPayload );
-                }
-                catch ( RtMidiError &error ) {
-                    error.printMessage();
-                    appState = FINISH_ERROR_OTHER;
-                }
-                
-                cout << "Successfully sent \"" << syxFilePath << "\" to MIDI OUT port: " << targetPortName << ", size: " << syxFileSize << " bytes.\n";
-                appState = FINISH_NO_ERR;
-                
-                break;
-                
-            case FINISH_NO_ERR:
-            case FINISH_ERROR_OTHER:
 
+                // try {
+                //     midiout->sendMessage( &sysexPayload );
+                // }
+                // catch ( RtMidiError &error ) {
+                //     cout << "**ERROR**\n";
+                //     error.printMessage();
+                //     appState = FINISH_ERROR_OTHER;
+                //     break;
+                // }
+                // appState = FINISH_ERROR_OTHER;
+                // break;
+                
+                cout << "Appending Firmware packet to payload - size: " << sysexPayload.size() << "\n";
+                packet.insert(packet.end(), sysexPayload.begin(), sysexPayload.end());
+                
+                appState = FW_SENT_WAIT;
+                break;
+
+            case FW_SENT_WAIT:
+                break;
+
+            case FINISH_ERROR_OTHER: 
+                cout << "ERROR - OTHER\n";
+            case FINISH_NO_ERR:
+                cout << "Exiting app.\n";
                 delete midiout;
                 return 0; // close app
                 break;
@@ -367,4 +440,155 @@ int main(int argc, const char * argv[])
         
         }
     }
+}
+
+// this function is called every 1ms
+void slotEmptyMIDIBuffer()
+{
+    std::vector<unsigned char> message;
+    static bool sendLastChunk = false;
+
+    if (packet.size() == 0)
+    {
+        return;
+    }
+
+    if (packet.size() > MAX_MIDI_SYSEX_SIZE)
+    {
+        cout << "ERROR: SYSEX TX BUFFER OVERFLOW, DISCARDING";
+        packet.clear();
+        return;
+    }
+
+    // send sysex in chunks
+    if (packet.size() > sysExTxChunkSize || sendLastChunk == true)
+    {
+        unsigned int sizeToSend = sendLastChunk ? (unsigned int)packet.size() : sysExTxChunkSize;
+
+        cout << "Sending SysEx: " << sizeToSend << "/" << packet.size() << " bytes, current\n";
+        // Create a sub-vector for the chunk to send
+        std::vector<uint8_t> chunkToSend(packet.begin(), packet.begin() + sizeToSend);
+
+        // Send the chunk
+        try
+        {
+            midiout->sendMessage(&chunkToSend);
+        }
+        catch (RtMidiError &error)
+        {
+            cout << "MIDI SEND LARGE SYSEX ERR";
+            packet.clear();
+            appState = FINISH_ERROR_OTHER;
+            return;
+        }
+
+        if (sendLastChunk) // if we just sent the last chunk, clear flag/buffer and exit
+        {
+            sendLastChunk = false;
+            packet.clear();
+
+            appState = FINISH_NO_ERR;
+            return;
+        }
+
+        // Remove the sent chunk from the packet
+        packet.erase(packet.begin(), packet.begin() + sizeToSend);
+
+
+        if (packet.size() < sysExTxChunkSize) // if we have one chunk left, loop around and send it
+        {
+            sendLastChunk = true;
+        }
+        return;
+    }
+    else
+    {
+        for (size_t i = 0; i < packet.size(); ++i)
+        {
+            
+            if (packet[i] == MIDI_SX_START) // small sysex, less than chunk size
+            {
+                cout << "Sending Small SysEx: " << packet.size() << "\n";
+                std::vector<unsigned char> smallSysExPacket;
+
+                bool stopSearch = false;
+
+                while (!stopSearch)
+                {
+                    smallSysExPacket.push_back(packet[i++]);
+
+                    if (packet[i] == MIDI_SX_STOP || i >= packet.size())
+                    {
+                        stopSearch = true;
+                    }
+                    else if (packet[i] > 127)
+                    {
+                        i--; // decrement index so the next loop looks at this byte
+                        stopSearch = true;
+                    }
+                }
+                smallSysExPacket.push_back(MIDI_SX_STOP); // always end sysex properly even if packet is incomplete
+
+                try
+                {
+                    midiout->sendMessage( &smallSysExPacket );
+                }
+                catch (RtMidiError &error)
+                {
+                    cout << "MIDI SEND SMALL SYSEX ERR: " << error.getMessage();
+                    packet.clear();
+                    appState = FINISH_ERROR_OTHER;
+                    return;
+                }
+                cout << "Sent Small SysEx";
+                appState = FINISH_NO_ERR;
+                return;
+            }
+            else // channel messages
+            {   
+                cout << "Sending Channel Message: " << i << "/" << packet.size() << "\n";
+                // Check if the current byte is a status byte
+                if (packet[i] >= 0x80)
+                {
+                    
+                    // If there's already a message being constructed, send it
+                    if (!message.empty())
+                    {
+                        try
+                        {
+                            midiout->sendMessage( &message );
+                        }
+                        catch (RtMidiError &error)
+                        {
+                            cout << "MIDI SEND PACKET ERR: " << error.getMessage();
+                        }
+                        message.clear(); // Clear the message vector for the next message
+                    }
+                }
+            }
+
+            // Add the current byte to the message
+            message.push_back(packet[i]);
+
+            // If it's the last byte but not a status byte, ensure the message is sent
+            if (i == packet.size() - 1 && !message.empty())
+            {
+                cout << "Last Byte: " << packet.size() << "\n";
+                try
+                {
+                    midiout->sendMessage( &message );
+                }
+                catch (RtMidiError &error)
+                {
+                   cout << "MIDI SEND PACKET ERR: " << error.getMessage();
+                }
+                cout << "Sent Channel Msg";
+                appState = FINISH_NO_ERR;
+                return;
+            }
+        }
+    }
+
+    // Clear the packet after processing all messages
+    packet.clear();
 }
