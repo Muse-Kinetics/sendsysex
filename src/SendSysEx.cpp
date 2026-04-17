@@ -1,8 +1,11 @@
 //
-//  SendSysEx.c
+//  SendSysEx.cpp
 //
-//  Written by EricB on 2023/3/31
-//  Copyright © 2023 Keith McMillen Instruments. All rights reserved.
+//  Written by Eric Bateman on 2023/3/31
+//  Copyright (c) 2023 Eric Bateman. All rights reserved.
+//  eric@musekinetics.com
+//
+//  SPDX-License-Identifier: MIT
 
 #include <iostream>
 #include <stdio.h>
@@ -75,8 +78,9 @@ int getPortNumber(string findPortName)
 void invalidArguments()
 {
     fprintf(stderr,
-            "\nKMI Send SysEx Utility \n"
-            "Copyright (c) 2023 Keith McMillen Instruments. All rights reserved. \n"
+            "\nSend SysEx Utility \n"
+            "Copyright (c) 2023 Eric Bateman. All rights reserved. \n"
+            "eric@musekinetics.com \n"
             "Written by Eric Bateman. \n"
             "\n"
             "Standard usage: SendSysEx -p [Destination MIDI Port Number] -f [Source SysEx file]\n"
@@ -197,7 +201,7 @@ int main(int argc, const char * argv[])
                 return 0;
             }
             
-            blCommand = fopen(blCommandFilePath,"r");
+            blCommand = fopen(blCommandFilePath,"rb");
             if (blCommand == nullptr)
             {
                 cout << "ERROR: file \"" << blCommandFilePath << "\" not found!\n";
@@ -231,7 +235,7 @@ int main(int argc, const char * argv[])
         
         // syx file
         {
-            syxFile = fopen(syxFilePath,"r");
+            syxFile = fopen(syxFilePath,"rb");
         
             if (syxFile == nullptr)
             {
