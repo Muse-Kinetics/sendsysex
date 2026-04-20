@@ -1,0 +1,43 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "soundstation",
+  "name": "SoundSTATION",
+  "summary": "Two-port family. Firmware updates use STM32 DFU — no MIDI SysEx bootloader. Cannot be updated via SendSysEx.",
+  "discovery": {
+    "familyMarkers": ["SoundSTATION"],
+    "safeProbeRoles": {
+      "application": ["control"],
+      "bootloader": []
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [48],
+    "bootloaderPidLsb": [],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "payloads": [],
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["SoundSTATION"],
+      "portLayout": {
+        "style": "named",
+        "inputs": [
+          { "index": 1, "role": "control", "name": "Control" },
+          { "index": 2, "role": "din", "name": "MIDI 5-pin DIN" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control", "name": "Control" },
+          { "index": 2, "role": "din", "name": "MIDI 5-pin DIN" }
+        ]
+      }
+    }
+  ]
+}

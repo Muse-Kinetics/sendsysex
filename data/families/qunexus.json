@@ -1,0 +1,98 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "qunexus",
+  "name": "QuNexus",
+  "summary": "Three-port family with legacy unnamed ports and newer named ports. Bootloader is distinguished by PID MSB rather than a dedicated bootloader PID.",
+  "discovery": {
+    "familyMarkers": ["QuNexus", "QuNexus Control Surface", "QuNexus Expander", "QuNexus CV"],
+    "safeProbeRoles": {
+      "application": ["control_surface", "port1"],
+      "bootloader": ["bootloader", "port1"]
+    },
+    "avoidProbeRoles": ["expander", "cv"]
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [25],
+    "bootloaderPidLsb": [25],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/QuNexus/QunexusEnterBootloader.syx",
+      "notes": ["Requests a reboot into bootloader mode for QuNexus devices."]
+    },
+    {
+      "id": "firmware_2_2_0",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.2.0",
+      "path": "syx/QuNexus/QuNexus_Firmware_v2.2.0.syx",
+      "default": true,
+      "latest": true,
+      "notes": ["Preferred current QuNexus firmware payload."]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "legacy_unnamed_application",
+      "state": "application",
+      "productStrings": ["QuNexus"],
+      "portLayout": {
+        "style": "unnamed_ordered",
+        "inputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" },
+          { "index": 3, "role": "cv" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" },
+          { "index": 3, "role": "cv" }
+        ]
+      }
+    },
+    {
+      "id": "named_application",
+      "state": "application",
+      "productStrings": ["QuNexus"],
+      "portLayout": {
+        "style": "named",
+        "inputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "expander", "name": "Expander" },
+          { "index": 3, "role": "cv", "name": "CV" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "expander", "name": "Expander" },
+          { "index": 3, "role": "cv", "name": "CV" }
+        ]
+      }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "productStrings": ["QuNexus"],
+      "portLayout": {
+        "style": "unnamed_ordered",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      },
+      "notes": [
+        "Bootloader family matching remains passive first, then is confirmed by PID MSB = 1."
+      ]
+    }
+  ]
+}

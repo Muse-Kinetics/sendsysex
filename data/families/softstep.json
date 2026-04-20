@@ -1,0 +1,230 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "softstep",
+  "name": "SoftStep",
+  "summary": "Covers SoftStep hardware revisions 1, 2, and 3 across the SSCOM era, named-port firmware, and bootloader operation.",
+  "discovery": {
+    "familyMarkers": ["SSCOM", "SoftStep", "SoftStep Bootloader"],
+    "safeProbeRoles": {
+      "application": ["control_surface", "main", "port1"],
+      "bootloader": ["bootloader"]
+    },
+    "avoidProbeRoles": ["expander", "trs_midi_out", "cv_out", "share"]
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [10, 11, 12, 13],
+    "bootloaderPidLsb": [14],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    },
+    "notes": [
+      "Legacy SSCOM units originally shipped without a bootloader.",
+      "Firmware 1.0.0 introduced the bootloader and changed the application product string to SoftStep.",
+      "SoftStep 3 uses its own PID but shares the SoftStep family naming."
+    ]
+  },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/SoftStep/Softstep-enter-bootloader.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
+      "notes": ["Requests a reboot from the application into bootloader mode."]
+    },
+    {
+      "id": "bootloader_installer_legacy",
+      "type": "bootloader_installer",
+      "targetState": "application",
+      "version": "0.9.9",
+      "path": "syx/SoftStep/Softstep-99-bootloader-trojan-horse.syx",
+      "hardware": ["softstep1", "softstep2"],
+      "notes": ["Used on legacy SSCOM-era units to install or trigger the original bootloader path."]
+    },
+    {
+      "id": "firmware_0_9_8",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "0.9.8",
+      "path": "syx/SoftStep/Softstep_Firmware_v0.9.8.syx",
+      "hardware": ["softstep1", "softstep2"],
+      "notes": ["Legacy firmware that uses SSCOM port names but is also compatible with bootloader."]
+    },
+    {
+      "id": "firmware_1_0_0",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.0",
+      "path": "syx/SoftStep/Softstep_Firmware_v1.0.0.syx",
+      "hardware": ["softstep1", "softstep2"],
+      "notes": ["First firmware to use the bootloader and the SoftStep application port name."]
+    },
+    {
+      "id": "firmware_1_0_1",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.1",
+      "path": "syx/SoftStep/Softstep_Firmware_v1.0.1.syx",
+      "hardware": ["softstep1", "softstep2"]
+    },
+    {
+      "id": "firmware_1_0_2",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.2",
+      "path": "syx/SoftStep/Softstep_Firmware_v1.0.2.syx",
+      "hardware": ["softstep1", "softstep2"]
+    },
+    {
+      "id": "firmware_1_0_3",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.3",
+      "path": "syx/SoftStep/Softstep_Firmware_v1.0.3.syx",
+      "hardware": ["softstep1", "softstep2"]
+    },
+    {
+      "id": "firmware_1_0_4",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.4",
+      "path": "syx/SoftStep/Softstep_Firmware_v1.0.4.syx",
+      "hardware": ["softstep1", "softstep2"]
+    },
+    {
+      "id": "firmware_2_0_2",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.0.2",
+      "path": "syx/SoftStep/Softstep_Firmware_v2.0.2.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"]
+    },
+    {
+      "id": "firmware_2_0_3",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.0.3",
+      "path": "syx/SoftStep/Softstep_Firmware_v2.0.3.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"]
+    },
+    {
+      "id": "firmware_2_0_4",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.0.4",
+      "path": "syx/SoftStep/Softstep_Firmware_v2.0.4.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
+      "notes": ["Stable application firmware payload."]
+    },
+    {
+      "id": "firmware_2_0_5",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.0.5",
+      "path": "syx/SoftStep/Softstep_Firmware_v2.0.5.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
+      "default": true,
+      "latest": true,
+      "notes": ["Preferred current SoftStep firmware image."]
+    },
+    {
+      "id": "reset_presets_2_0_5",
+      "type": "utility",
+      "targetState": "application",
+      "version": "2.0.5",
+      "path": "syx/SoftStep/SoftStep_Reset_Presets_fw205.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
+      "notes": ["Resets presets for firmware 2.0.5 systems."]
+    },
+    {
+      "id": "reset_settings_2_0_5",
+      "type": "utility",
+      "targetState": "application",
+      "version": "2.0.5",
+      "path": "syx/SoftStep/SoftStep_Reset_Settings_fw205.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
+      "notes": ["Resets settings for firmware 2.0.5 systems."]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "legacy_sscom_application",
+      "state": "application",
+      "hardware": ["softstep1", "softstep2"],
+      "firmware": { "maxExclusive": "0.9.8" },
+      "productStrings": ["SSCOM"],
+      "portLayout": {
+        "style": "unnamed_ordered",
+        "inputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" }
+        ]
+      }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
+      "firmware": { "minInclusive": "1.0.0" },
+      "productStrings": ["SoftStep Bootloader"],
+      "portLayout": {
+        "style": "unnamed_single_port",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      }
+    },
+    {
+      "id": "modern_named_application",
+      "state": "application",
+      "hardware": ["softstep1", "softstep2"],
+      "firmware": { "minInclusive": "1.0.0" },
+      "productStrings": ["SoftStep"],
+      "portLayout": {
+        "style": "named",
+        "inputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "expander", "name": "Expander" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "expander", "name": "Expander" }
+        ],
+        "servicePorts": [
+          { "direction": "inout", "role": "share", "name": "Share", "optional": true }
+        ]
+      }
+    },
+    {
+      "id": "softstep3_application",
+      "state": "application",
+      "hardware": ["softstep3"],
+      "firmware": { "minInclusive": "2.0.0" },
+      "productStrings": ["SoftStep"],
+      "portLayout": {
+        "style": "named",
+        "inputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "trs_midi_out", "name": "TRS MIDI Out" },
+          { "index": 3, "role": "cv_out", "name": "CV Out" }
+        ],
+        "servicePorts": [
+          { "direction": "inout", "role": "share", "name": "Share", "optional": true }
+        ]
+      }
+    }
+  ]
+}

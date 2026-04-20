@@ -1,0 +1,46 @@
+{
+  "$schema": "./schemas/kmi_manifest.schema.json",
+  "schemaVersion": 2,
+  "status": "draft",
+  "purpose": {
+    "primary": "Passively classify KMI product families from OS-reported MIDI port names before opening any ports.",
+    "secondary": [
+      "Choose safe probe ports for single-client MIDI backends",
+      "Confirm exact product identity from SysEx replies",
+      "Resolve editor module, bootloader command, and firmware payload selection"
+    ]
+  },
+  "vendor": {
+    "name": "KMI Music, Inc.",
+    "sysexManufacturerId": [0, 1, 95]
+  },
+  "matching": {
+    "strategy": "family_first_then_sysex_confirm",
+    "normalization": {
+      "caseInsensitive": true,
+      "trimWhitespace": true,
+      "collapseInternalWhitespace": true,
+      "stripTrailingWindowsInstanceNumbers": true,
+      "allowPartialMatch": false
+    },
+    "windowsLegacyRules": {
+      "treatNumberedSuffixAsInstanceArtifact": true,
+      "legacyMultiportPattern": "MIDI{IN|OUT}{portNumber} (ProductName)",
+      "interpretUnnamedPortOrderInCode": true,
+      "notes": [
+        "The first Windows port often reports only the product string.",
+        "Additional legacy ports may appear as MIDIINn or MIDIOUTn entries derived from the product string.",
+        "Names with trailing instance numbers are Windows-added artifacts and should normalize to the base product string.",
+        "Use exact equality only after normalization; never use partial matching."
+      ]
+    }
+  },
+  "families": [
+    { "id": "softstep", "name": "SoftStep", "file": "families/softstep.json" },
+    { "id": "qunexus", "name": "QuNexus", "file": "families/qunexus.json" },
+    { "id": "quneo", "name": "QuNeo", "file": "families/quneo.json" },
+    { "id": "12step", "name": "12 Step", "file": "families/12step.json" },
+    { "id": "kboard", "name": "K-Board", "file": "families/kboard.json" },
+    { "id": "kbp4", "name": "K-Board Pro 4", "file": "families/kbp4.json" }
+  ]
+}

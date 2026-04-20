@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KMI Device Family",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "discovery", "identity", "profiles"],
+  "$defs": {
+    "portDescriptor": {
+      "type": "object",
+      "required": ["index", "role"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "role": { "type": "string" },
+        "name": { "type": "string" },
+        "optional": { "type": "boolean" }
+      }
+    },
+    "servicePort": {
+      "type": "object",
+      "required": ["direction", "role", "name"],
+      "properties": {
+        "direction": { "type": "string" },
+        "role": { "type": "string" },
+        "name": { "type": "string" },
+        "optional": { "type": "boolean" }
+      }
+    },
+    "payloadAsset": {
+      "type": "object",
+      "required": ["id", "type", "targetState", "path"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["firmware", "bootloader_entry", "bootloader_installer", "utility"]
+        },
+        "targetState": { "type": "string", "enum": ["application", "bootloader"] },
+        "version": { "type": "string" },
+        "path": { "type": "string" },
+        "hardware": { "type": "array", "items": { "type": "string" } },
+        "default": { "type": "boolean" },
+        "latest": { "type": "boolean" },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "type": "integer", "minimum": 2 },
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "summary": { "type": "string" },
+    "discovery": {
+      "type": "object",
+      "required": ["familyMarkers", "safeProbeRoles"],
+      "properties": {
+        "familyMarkers": { "type": "array", "items": { "type": "string" } },
+        "safeProbeRoles": { "type": "object" },
+        "avoidProbeRoles": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "required": ["manufacturerId", "stateDetection"],
+      "properties": {
+        "manufacturerId": { "type": "array", "items": { "type": "integer" } },
+        "applicationPidLsb": { "type": "array", "items": { "type": "integer" } },
+        "bootloaderPidLsb": { "type": "array", "items": { "type": "integer" } },
+        "stateDetection": { "type": "object" },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "payloads": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/payloadAsset" }
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "state", "productStrings", "portLayout"],
+        "properties": {
+          "id": { "type": "string" },
+          "state": { "type": "string", "enum": ["application", "bootloader"] },
+          "hardware": { "type": "array", "items": { "type": "string" } },
+          "firmware": { "type": "object" },
+          "productStrings": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "notes": { "type": "array", "items": { "type": "string" } },
+          "portLayout": {
+            "type": "object",
+            "required": ["style", "inputs", "outputs"],
+            "properties": {
+              "style": { "type": "string" },
+              "inputs": { "type": "array", "items": { "$ref": "#/$defs/portDescriptor" } },
+              "outputs": { "type": "array", "items": { "$ref": "#/$defs/portDescriptor" } },
+              "servicePorts": { "type": "array", "items": { "$ref": "#/$defs/servicePort" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

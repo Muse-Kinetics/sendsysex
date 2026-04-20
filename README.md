@@ -15,19 +15,43 @@ Licensed under the [MIT License](LICENSE).
 
 CMake is the primary build system and works on both macOS and Windows.
 
+### 1. Clone the repo and submodule
+
+```sh
+git clone <repo-url>
+cd sendsysex
+git submodule update --init --recursive
+```
+
+### 2. Configure and build
+
 ```sh
 cmake -B build
 cmake --build build
 ```
 
-The binary is placed in `build/` (or `build/Debug/` on Windows with MSVC).
+The binary is placed in `build/` (or `build/Debug/` / `build/Release/` on Windows with MSVC).
 
 ### Windows
 
-Requires Visual Studio or the MSVC toolchain. Build as above, or generate a VS solution:
+Requires Visual Studio or the MSVC toolchain. The simplest option is to use the preset:
 
 ```sh
-cmake -G "Visual Studio 17 2022" -B build/msvc
+cmake --preset windows-msvc
+cmake --build --preset windows-release
+```
+
+Or, for an explicit Release build without presets:
+
+```sh
+cmake -B build
+cmake --build build --config Release
+```
+
+You can also generate a VS solution directly:
+
+```sh
+cmake -G "Visual Studio 17 2022" -A x64 -B build/msvc
 ```
 
 ---

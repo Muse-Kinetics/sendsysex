@@ -1,0 +1,83 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "kbp4",
+  "name": "K-Board Pro 4",
+  "summary": "Dedicated family entry preserved for future editor routing and firmware mapping.",
+  "discovery": {
+    "familyMarkers": ["K-Board Pro 4", "K-Board Pro 4 Bootloader"],
+    "safeProbeRoles": {
+      "application": ["main"],
+      "bootloader": ["bootloader"]
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [37],
+    "bootloaderPidLsb": [38],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/KBP4/loadBootloader_K-Board_Pro_4.syx",
+      "notes": ["Requests a reboot into bootloader mode for K-Board Pro 4."]
+    },
+    {
+      "id": "firmware_1_2_1_1_central",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.2.1.1",
+      "path": "syx/KBP4/v1.2.1.1_kbp4_central.syx",
+      "default": true,
+      "latest": true,
+      "notes": ["Central firmware payload for the current K-Board Pro 4 update set."]
+    },
+    {
+      "id": "firmware_1_2_1_1_peripheral",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.2.1.1",
+      "path": "syx/KBP4/v1.2.1.1_kbp4_peripheral.syx",
+      "default": true,
+      "latest": true,
+      "notes": ["Peripheral firmware payload for the current K-Board Pro 4 update set."]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["K-Board Pro 4"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "main" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main" }
+        ]
+      }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "productStrings": ["K-Board Pro 4 Bootloader"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      }
+    }
+  ]
+}

@@ -2,597 +2,535 @@
 //  SendSysEx.cpp
 //
 //  Written by Eric Bateman on 2023/3/31
-//  Copyright (c) 2023 Eric Bateman. All rights reserved.
-//  eric@musekinetics.com
-//
 //  SPDX-License-Identifier: MIT
 
-#include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
-#include "RtMidi.h"
-
+#include <algorithm>
 #include <chrono>
+#include <iomanip>
+#include <iostream>
+#include <string>
 #include <thread>
+#include <vector>
 
+#include "RtMidi.h"
+#include "deviceHelpers.h"
+#include "kmiDevice.h"
 
-
-#define MAX_MIDI_SYSEX_SIZE 250000 // reject payloads larger than this, also prevents buffer overflow
-
-#define MIDI_SX_START 0xF0
-#define MIDI_SX_STOP 0xF7
-
-using namespace std;
-
-enum
+namespace
 {
-    APP_INIT,
-    ENTER_BOOTLOADER,
-    WAIT_BOOTLOADER,
-    SEND_FIRMWARE,
-    FW_SENT_WAIT,
-    FINISH_NO_ERR,
-    FINISH_ERROR_OTHER
+const std::size_t MAX_MIDI_SYSEX_SIZE = 250000;
+const unsigned int DEFAULT_CHUNK_SIZE = 48;
+const unsigned int DEFAULT_CHUNK_DELAY_MS = 2;
+const unsigned int DEFAULT_POLL_SECONDS = 1;
+
+struct CliOptions
+{
+    bool listPortsOnly = false;
+    bool listNormalizedOnly = false;
+    bool usePortNumber = false;
+    bool automaticMode = false;
+    bool idRequestOnly = false;
+    bool showHelp = false;
+    int portNumber = -1;
+    std::string portName;
+    std::string filePath;
+    std::string familyName;
+    std::string versionText;
+    std::string parseError;
+    unsigned int chunkSize = DEFAULT_CHUNK_SIZE;
+    unsigned int chunkDelayMs = DEFAULT_CHUNK_DELAY_MS;
+    unsigned int pollSeconds = DEFAULT_POLL_SECONDS;
 };
 
-bool appRunning = true;
-bool verboseMode = false;
-int appState = APP_INIT;
 
-RtMidiOut *midiout = 0;
-
-std::vector<unsigned char> packet; // the midi TX buffer, put outgoing midi messages here to transmit them
-
-unsigned int sysExTxChunkSize = 48; // this is equivalent to 16 USB MIDI messages, or a full USB MIDI packet 
-unsigned int sysExTxChunkDelay = 2; // limit sysex to one packet per 1ms
-
-auto syxExTxChunkTimer = std::chrono::high_resolution_clock::now();
-auto timeNow = std::chrono::high_resolution_clock::now();
-
-void slotEmptyMIDIBuffer();
-
-// get MIDI port number matching port name
-int getPortNumber(string findPortName)
-{ 
-    string thisPortName;
-    int numOutPorts = midiout->getPortCount();
-
-    int thisOutPortNum = -1;
-    for (int i = 0; i < numOutPorts; i++)
-    {
-        thisPortName = midiout->getPortName(i);
-        
-        if (verboseMode)
-        {
-            cout << "MIDI Output Port detected: " << thisPortName << "\n";
-        }
-        
-        if (thisPortName == findPortName)
-        {
-            thisOutPortNum = i;
-        }
-    }
-    return thisOutPortNum;
+void printHelp()
+{
+    std::cout
+        << "\nSend SysEx Utility"
+        << "\n(c) 2026 KMI Music, Inc."
+        << "\nAuthor: Eric Bateman (eric@musekinetics.com)\n"
+        << "\nModes:\n"
+        << "  1. Raw send mode: Send a SysEx file directly to a raw RtMidi output port.\n"
+        << "  2. Automatic update mode: Hand off to kmiDevice for family-based firmware updates.\n"
+        << "\nUsage:\n"
+        << "  SendSysEx -l\n"
+        << "  SendSysEx --list-normalized [family]\n"
+        << "  SendSysEx -p <port-number> -f <file.syx> [-cs <bytes>] [-cd <ms>]\n"
+        << "  SendSysEx -n <raw-port-name> -f <file.syx> [-cs <bytes>] [-cd <ms>]\n"
+        << "  SendSysEx --fw-update <family> [--fw-version <version>] [-t <seconds>] [-cs <bytes>] [-cd <ms>]\n"
+        << "  SendSysEx --id-request <family> [-t <seconds>]\n"
+        << "\nRaw send mode:\n"
+        << "  -l                         List all raw RtMidi input and output ports\n"
+        << "  --list-normalized [family] List raw RtMidi port names and their normalized forms\n"
+        << "                             Defaults to SoftStep if no family is provided\n"
+        << "  -p <num>                   Select a raw RtMidi output port by number\n"
+        << "  -n <name>                  Select a raw RtMidi output port by exact name\n"
+        << "  -f <file>                  SysEx file to send directly to the selected raw port\n"
+        << "\nAutomatic update mode:\n"
+        << "  --fw-update <family>       Supported family name such as SoftStep, QuNeo, or QuNexus\n"
+        << "  --fw-version <version>     Firmware version; omit to use the default from the family JSON\n"
+        << "  --id-request <family>      Connect, send an identity request, print the reply, then exit\n"
+        << "  -t <seconds>               Poll interval while waiting for the device to appear or reboot\n"
+        << "\nTransfer options:\n"
+        << "  -cs, --chunk-size <bytes>  SysEx chunk size in bytes (default: 48)\n"
+        << "  -cd, --chunk-delay <ms>    Delay between chunks in milliseconds (default: 2)\n"
+        << "  -h, --help                 Show this help message\n"
+        << "\nNotes:\n"
+        << "  - Raw send mode uses RtMidi directly and does not normalize port names for you.\n"
+        << "  - Automatic update mode uses the family database and normalized exact matching internally.\n"
+        << "\nExamples:\n"
+        << "  SendSysEx -l\n"
+        << "  SendSysEx --list-normalized QuNexus\n"
+        << "  SendSysEx -p 0 -f firmware.syx\n"
+        << "  SendSysEx -n \"SoftStep Bootloader 1\" -f firmware.syx\n"
+        << "  SendSysEx --fw-update SoftStep\n"
+        << "  SendSysEx --fw-update SoftStep --fw-version 2.0.4\n"
+        << "  SendSysEx --id-request QuNexus\n\n";
 }
 
-void invalidArguments()
+void listPorts(RtMidiOut &midiOut)
 {
-    fprintf(stderr,
-            "\nSend SysEx Utility \n"
-            "Copyright (c) 2023 Eric Bateman. All rights reserved. \n"
-            "eric@musekinetics.com \n"
-            "Written by Eric Bateman. \n"
-            "\n"
-            "Standard usage: SendSysEx -p [Destination MIDI Port Number] -f [Source SysEx file]\n"
-            "Example: SendSysEx BopPad BopPad.syx \n"
-            "\n"
-            "Bootloader update method: SendSysEx -p [Destination MIDI Port Number] -b [Bootloader Port Name] -t [time to wait for bootloader port]  -bc [enter bootloader SysEx file] -f [Source SysEx file]\n"
-            "\n"
-            "Use flag -l to list ports.\n"
-            );
+    RtMidiIn midiIn;
+    const unsigned int numInPorts = midiIn.getPortCount();
+    for (unsigned int i = 0; i < numInPorts; ++i)
+        std::cout << "MIDI Input  Port " << i << ": " << midiIn.getPortName(i) << "\n";
 
-    verboseMode = true;
-    int listPorts = getPortNumber(""); // list ports
+    const unsigned int numOutPorts = midiOut.getPortCount();
+    for (unsigned int i = 0; i < numOutPorts; ++i)
+        std::cout << "MIDI Output Port " << i << ": " << midiOut.getPortName(i) << "\n";
 }
 
-
-
-
-int main(int argc, const char * argv[])
+void listNormalizedPorts(const std::string &familyName)
 {
-    using namespace std::this_thread; // sleep_for, sleep_until
-    using namespace std::chrono; // nanoseconds, system_clock, seconds
-    
-    char *bootloaderPortName;
-    long blFileSize = 0;
-    FILE *blCommand;
-    char *blCommandFilePath = NULL;
-    std::vector<unsigned char> blCommandPayload;
-    
-    char *appPortName;
-    char *appPortNum;
-    long syxFileSize = 0;
-    FILE *syxFile;
-    char *syxFilePath = NULL;
-    std::vector<unsigned char> sysexPayload;
-    
-    string thisPortName, targetPortName;
-    string thisArg;
-    
-    bool enterBootloaderMode = false;
-    bool useOnePortNumber = false;
-    unsigned char bootLoaderTimeout = 1;
+    const std::string familyId = familyName.empty() ? std::string("softstep") : normalizeFamilyId(familyName);
+    kmiDevice device(familyId);
+    const bool refreshed = device.refreshPorts();
 
-    int i, numOutPorts;
-    int thisOutPortNum = -1;
-    unsigned char syxByte;
-    
-    // RtMidiOut constructor
-    try {
-        midiout = new RtMidiOut();
-    }
-    catch ( RtMidiError &error ) {
-        error.printMessage();
-        appState = FINISH_ERROR_OTHER;
-    }
+    if (!refreshed && !device.getLastError().empty())
+        std::cout << "Note: " << device.getLastError() << "\n";
 
-    // Parse arguments
-    if (argc > 1)
+    if (!refreshed || device.getState() != kmiDevice::State::connected)
+        device.printPortTranslations();
+}
+
+bool sendFileToPort(RtMidiOut &midiOut,
+                    int portNumber,
+                    const std::string &filePath,
+                    unsigned int chunkSize,
+                    unsigned int chunkDelayMs,
+                    std::string &errorMessage)
+{
+    try
     {
-        // load arguments
-        for (int i = 1; i < argc; i++)
+        const std::string portName = midiOut.getPortName(static_cast<unsigned int>(portNumber));
+        std::cout << "Opening port: " << portNumber << "\n";
+        midiOut.openPort(static_cast<unsigned int>(portNumber));
+
+        const bool sent = kmiDevice::sendFileToOpenPort(midiOut,
+                                                        portName,
+                                                        filePath,
+                                                        chunkSize,
+                                                        chunkDelayMs,
+                                                        errorMessage);
+        midiOut.closePort();
+        return sent;
+    }
+    catch (RtMidiError &error)
+    {
+        errorMessage = error.getMessage();
+    }
+    catch (std::exception &error)
+    {
+        errorMessage = error.what();
+    }
+
+    try
+    {
+        if (midiOut.isPortOpen())
+            midiOut.closePort();
+    }
+    catch (...)
+    {
+    }
+
+    return false;
+}
+
+CliOptions parseArguments(int argc, const char *argv[])
+{
+    CliOptions options;
+
+    if (argc < 2)
+    {
+        options.showHelp = true;
+        return options;
+    }
+
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+
+        if (arg == "-h" || arg == "--help")
         {
-            //cout << "argument " << i << " : " << (char *)argv[i];
-            thisArg = argv[i];
-            if (thisArg == "-n" && i + 1 < argc)
-            {
-                appPortName = (char *)argv[++i];
-                std::cout << "Port Name: " << appPortName << "\n";
-            }
-            else if (thisArg == "-p" && i + 1 < argc)
-            {
-                useOnePortNumber = true;
-                thisOutPortNum = std::atoi(argv[++i]); // Increment i and convert to int
-                std::cout << "Using port: " << thisOutPortNum << "\n";
-            }
-            else if (thisArg == "-f" && argc > i)
-            {
-                syxFilePath = (char *)argv[i++ + 1];
-            }
-            else if (thisArg == "-b" && argc > i)
-            {
-                bootloaderPortName = (char *)argv[i++ + 1];
-                enterBootloaderMode = true;
-            }
-            else if (thisArg == "-bc" && argc > i)
-            {
-                blCommandFilePath = (char *)argv[i++ + 1];
-            }
-            else if (thisArg == "-t" && argc > i)
-            {
-                bootLoaderTimeout = strtol(argv[i++ + 1], nullptr, 0);
-            }
-            else if (thisArg == "-l")
-            {
-                verboseMode = true;
-                thisOutPortNum = getPortNumber(""); // list ports
-            }
-            else
-            {
-                invalidArguments();
-                return 0;
-            }
-            //printf(" argument %d: %s\n", i, argv[i]);
+            options.showHelp = true;
+            return options;
         }
-        
-        if (syxFilePath == NULL)
+        if (arg == "-l")
         {
-            cout << "ERROR: No SysEx File Specified!";
-            return 0;
+            options.listPortsOnly = true;
+            continue;
         }
-        
-        // bootloader
-        if (enterBootloaderMode)
+        if (arg == "--list-normalized")
         {
-            cout << "Bootloader + firmware mode\n";
-            if (blCommandFilePath == NULL)
-            {
-                cout << "ERROR: No enter-bootloader command specified\n";
-                return 0;
-            }
-            
-            blCommand = fopen(blCommandFilePath,"rb");
-            if (blCommand == nullptr)
-            {
-                cout << "ERROR: file \"" << blCommandFilePath << "\" not found!\n";
-                return 0;
-            }
-            fseek(blCommand, 0L, SEEK_END);   // goto end of the file
-            blFileSize = ftell(blCommand);   // get size
-            rewind(blCommand);                // back to beginning of file
-            
-            if (blFileSize < 1)
-            {
-                cout << "ERROR: file \"" << blCommandFilePath << "\" is zero bytes!\n";
-                return 0;
-            }
-            
-            // load file into vector
-            cout << "Loading \"" << blCommandFilePath << "\"\n";
-            for (i = 0; i < blFileSize; i++)
-            {
-                syxByte = (unsigned char)fgetc(blCommand);
-                blCommandPayload.push_back(syxByte);
-            }
-            
-            appState = ENTER_BOOTLOADER;
+            options.listNormalizedOnly = true;
+            continue;
         }
-        else
+        if (arg == "-p")
         {
-             cout << "Firmware only mode\n";
-            appState = SEND_FIRMWARE;
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for -p.";
+                return options;
+            }
+
+            unsigned int parsedPortNumber = 0;
+            if (!parseUnsignedOption(argv[++i], parsedPortNumber))
+            {
+                options.parseError = "Invalid port number.";
+                return options;
+            }
+
+            options.usePortNumber = true;
+            options.portNumber = static_cast<int>(parsedPortNumber);
+            continue;
         }
-        
-        // syx file
+        if (arg == "-n")
         {
-            syxFile = fopen(syxFilePath,"rb");
-        
-            if (syxFile == nullptr)
+            if (i + 1 >= argc)
             {
-                cout << "ERROR: file \"" << syxFilePath << "\" not found!\n";
-                return 0;
+                options.showHelp = true;
+                options.parseError = "Missing value for -n.";
+                return options;
             }
-            
-            fseek(syxFile, 0L, SEEK_END);   // goto end of the file
-            syxFileSize = ftell(syxFile);   // get size
-            rewind(syxFile);                // back to beginning of file
-            
-            if (syxFileSize < 1)
-            {
-                cout << "ERROR: file \"" << syxFilePath << "\" is zero bytes!\n";
-                return 0;
-            }
-            
-            // load file into vector
-            cout << "Loading \"" << syxFilePath << "\"\n";
-            for (i = 0; i < syxFileSize; i++)
-            {
-                syxByte = (unsigned char)fgetc(syxFile);
-                sysexPayload.push_back(syxByte);
-            }
+
+            options.portName = argv[++i];
+            continue;
         }
-        
+        if (arg == "-f")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for -f.";
+                return options;
+            }
+
+            options.filePath = argv[++i];
+            continue;
+        }
+        if (arg == "-t")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for -t.";
+                return options;
+            }
+
+            unsigned int pollSeconds = DEFAULT_POLL_SECONDS;
+            if (!parseUnsignedOption(argv[++i], pollSeconds) || pollSeconds == 0)
+            {
+                options.parseError = "Invalid poll interval.";
+                return options;
+            }
+            options.pollSeconds = pollSeconds;
+            continue;
+        }
+        if (arg == "-cs" || arg == "--chunk-size")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --chunk-size.";
+                return options;
+            }
+
+            if (!parseUnsignedOption(argv[++i], options.chunkSize) || options.chunkSize < 1 || options.chunkSize > MAX_MIDI_SYSEX_SIZE)
+            {
+                options.parseError = "Invalid chunk size. Use a value from 1 to " + std::to_string(MAX_MIDI_SYSEX_SIZE) + " bytes.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "-cd" || arg == "--chunk-delay")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --chunk-delay.";
+                return options;
+            }
+
+            if (!parseUnsignedOption(argv[++i], options.chunkDelayMs))
+            {
+                options.parseError = "Invalid chunk delay.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--fw-update")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --fw-update.";
+                return options;
+            }
+
+            options.automaticMode = true;
+            options.familyName = argv[++i];
+            continue;
+        }
+        if (arg == "--id-request")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --id-request.";
+                return options;
+            }
+
+            options.idRequestOnly = true;
+            options.familyName = argv[++i];
+            continue;
+        }
+        if (options.listNormalizedOnly && options.familyName.empty() && !options.automaticMode && !arg.empty() && arg[0] != '-')
+        {
+            options.familyName = arg;
+            continue;
+        }
+        if (arg.find("--fw-update=") == 0)
+        {
+            options.automaticMode = true;
+            options.familyName = arg.substr(std::string("--fw-update=").size());
+            continue;
+        }
+        if (arg == "--fw-version")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --fw-version.";
+                return options;
+            }
+
+            options.automaticMode = true;
+            options.versionText = argv[++i];
+            continue;
+        }
+        if (arg.find("--fw-version=") == 0)
+        {
+            options.automaticMode = true;
+            options.versionText = arg.substr(std::string("--fw-version=").size());
+            continue;
+        }
+
+        options.showHelp = true;
+        options.parseError = "Unrecognized argument: " + arg;
+        return options;
+    }
+
+    return options;
+}
+
+int runIdentityRequest(const CliOptions &options)
+{
+    if (options.familyName.empty())
+    {
+        std::cout << "ERROR: --id-request requires a family name.\n";
+        return 1;
+    }
+
+    kmiDevice device(options.familyName);
+
+    std::cout << "Waiting for " << options.familyName << " to appear...\n";
+
+    for (unsigned int attempt = 0; attempt < 60; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(options.pollSeconds));
+
+        if (device.refreshPorts())
+            break;
+
+        std::cout << "Waiting " << options.pollSeconds << " second(s) for " << options.familyName << " to connect...\n";
+    }
+
+    if (device.getState() == kmiDevice::State::disconnected)
+    {
+        std::cout << "ERROR: " << (device.getLastError().empty() ? "Device not found." : device.getLastError()) << "\n";
+        return 1;
+    }
+
+    // refreshPorts already sends the identity request and waits up to 500 ms.
+    // If the reply has not arrived yet (slow device), poll a bit longer.
+    if (!device.hasReceivedIdentity())
+    {
+        std::cout << "Waiting for identity reply...\n";
+        for (int i = 0; i < 40 && !device.hasReceivedIdentity(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    if (!device.hasReceivedIdentity())
+    {
+        std::cout << "No identity reply received within the timeout.\n";
+        return 1;
+    }
+
+    device.printIdentityMetadata();
+    return 0;
+}
+
+int runAutomaticProcess(const CliOptions &options)
+{
+    if (options.familyName.empty())
+    {
+        std::cout << "ERROR: --fw-update requires a family name.\n";
+        return 1;
+    }
+
+    kmiDevice device(options.familyName);
+
+    if (options.versionText.empty())
+    {
+        if (!device.setDefaultFwVersion(true))
+        {
+            std::cout << "ERROR: " << device.getLastError() << "\n";
+            return 1;
+        }
     }
     else
     {
-        invalidArguments();
+        version_t requestedVersion;
+        if (!parseVersionString(options.versionText, requestedVersion))
+        {
+            std::cout << "ERROR: Invalid firmware version format. Use a value such as 2.0.4.\n";
+            return 1;
+        }
+        if (!device.setFwVersion(requestedVersion, true))
+        {
+            std::cout << "ERROR: " << device.getLastError() << "\n";
+            return 1;
+        }
+    }
+
+    if (!device.runAutomaticUpdate(options.chunkSize, options.chunkDelayMs, options.pollSeconds))
+    {
+        std::cout << "ERROR: " << device.getLastError() << "\n";
+        return 1;
+    }
+
+    std::cout << "Automatic update flow finished.\n";
+    return 0;
+}
+
+int runManualProcess(const CliOptions &options)
+{
+    try
+    {
+        RtMidiOut midiOut;
+
+        if (options.listNormalizedOnly)
+        {
+            listNormalizedPorts(options.familyName);
+            if (options.filePath.empty())
+                return 0;
+        }
+
+        if (options.listPortsOnly)
+        {
+            listPorts(midiOut);
+            if (options.filePath.empty())
+                return 0;
+        }
+
+        if (options.filePath.empty())
+        {
+            std::cout << "ERROR: No SysEx file specified.\n";
+            return 1;
+        }
+
+        if (!options.usePortNumber && options.portName.empty())
+        {
+            std::cout << "ERROR: No MIDI output port selected. Use -p <num> or -n <name>.\n";
+            return 1;
+        }
+
+        int portNumber = -1;
+        if (options.usePortNumber)
+        {
+            portNumber = options.portNumber;
+        }
+        else if (!options.portName.empty())
+        {
+            portNumber = kmiDevice::findOutputPortNumberByName(midiOut, options.portName);
+        }
+
+        const unsigned int numOutPorts = midiOut.getPortCount();
+        if (portNumber < 0 || static_cast<unsigned int>(portNumber) >= numOutPorts)
+        {
+            std::cout << "ERROR: MIDI output port not found. Use -l to list the raw RtMidi names and numbers.\n";
+            return 1;
+        }
+
+        std::string errorMessage;
+        if (!sendFileToPort(midiOut, portNumber, options.filePath, options.chunkSize, options.chunkDelayMs, errorMessage))
+        {
+            std::cout << "ERROR: " << errorMessage << "\n";
+            return 1;
+        }
+    }
+    catch (RtMidiError &error)
+    {
+        std::cout << "ERROR: " << error.getMessage() << "\n";
+        return 1;
+    }
+
+    return 0;
+}
+}
+
+int main(int argc, const char *argv[])
+{
+    const CliOptions options = parseArguments(argc, argv);
+
+    if (!options.parseError.empty())
+    {
+        std::cout << "ERROR: " << options.parseError << "\n";
+        if (options.showHelp)
+        {
+            std::cout << "\n";
+            printHelp();
+        }
+        return 1;
+    }
+
+    if (options.showHelp)
+    {
+        printHelp();
         return 0;
     }
-    
-    // MAIN LOOP
-    while (appRunning)
-    {
-        timeNow = std::chrono::high_resolution_clock::now();
-        unsigned int duration = std::chrono::duration_cast<std::chrono::milliseconds>(timeNow - syxExTxChunkTimer).count();
 
-        if (duration > sysExTxChunkDelay)
-        {
-            syxExTxChunkTimer = std::chrono::high_resolution_clock::now();
-            slotEmptyMIDIBuffer();
-        }
+    std::cout << "Chunk size: " << options.chunkSize << " bytes, delay: " << options.chunkDelayMs << " ms\n";
 
-        //cout << "Execute App State: " << appState << "\n";
-        switch (appState)
-        {
-            case ENTER_BOOTLOADER:
-                cout << "Enter bootloader\n";
-                // get MIDI port number matching port name
-                numOutPorts = midiout->getPortCount();
-                
-                if (numOutPorts < 1)
-                {
-                    cout << "Error: no MIDI output ports available\n";
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-                
-                thisOutPortNum = useOnePortNumber ? getPortNumber(targetPortName) : thisOutPortNum;
-                if (thisOutPortNum == -1)
-                {
-                    cout << "Error: MIDI output port \"" << appPortName << "\" not found!\n";
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-                
-                // Attempt to open midi output
-                cout << "Opening port: " << thisOutPortNum << "\n";
-                try {
-                    midiout->openPort(thisOutPortNum);
-                }
-                catch ( RtMidiError &error ) {
-                    cout << "**ERROR**\n";
-                    error.printMessage();
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-                
-                cout << "Sending Bootloader image/command to port: " << thisOutPortNum << "\n";
-                try {
-                    midiout->sendMessage( &blCommandPayload );
-                }
-                catch ( RtMidiError &error ) {
-                    cout << "**ERROR**\n";
-                    error.printMessage();
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-                
-                cout << "Successfully sent \"" << blCommandFilePath << "\" to MIDI OUT port: " << appPortName << ", size: " << blFileSize << " bytes.\n";
-                
-                try {
-                    midiout->closePort();
-                }
-                catch ( RtMidiError &error ) {
-                    cout << "**ERROR**\n";
-                    error.printMessage();
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-                
-                appState = WAIT_BOOTLOADER;
-                break;
-                
-            case WAIT_BOOTLOADER:
-                cout << "Waiting " << to_string(bootLoaderTimeout) << " second(s) for Bootloader port...\n";
-                sleep_for(seconds(bootLoaderTimeout)); // putting this here to give midi system time before running the first check
-                
-                if (getPortNumber(bootloaderPortName) > -1)
-                {
-                    cout << "Found bootloader port: " << bootloaderPortName << "\n";
-                    appState = SEND_FIRMWARE;
-                    break;
-                }
-                else
-                {
-                    // seep_for could alternately go here
-                    break;
-                }
-                
-                break; // redundant but safety
-            case SEND_FIRMWARE:
-                
-                // get MIDI port number matching port name
-                numOutPorts = midiout->getPortCount();
-                
-                cout << "Send Firmware - numOutPorts: " << numOutPorts << "\n";
+    if (options.listNormalizedOnly && options.filePath.empty() && options.versionText.empty())
+        return runManualProcess(options);
 
-                if (numOutPorts < 1)
-                {
-                    cout << "Error: no MIDI output ports available\n";
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-                
-                // cout << "enterBootloaderMode: " << enterBootloaderMode << "\n";
+    if (options.idRequestOnly)
+        return runIdentityRequest(options);
 
-                // // select name based on wether we are entering bootloader mode or not
-                // if (enterBootloaderMode)
-                // {
-                //     cout << "1\n";
-                //     targetPortName = bootloaderPortName;
-                // }
-                // else
-                // {
-                //     cout << "2\n";
-                //     targetPortName = appPortName;
-                // }
+    if (options.automaticMode)
+        return runAutomaticProcess(options);
 
-                cout << "3\n";
-                
-                cout << "thisOutPortNum: " << thisOutPortNum << "\n";
-
-                thisOutPortNum = useOnePortNumber ? thisOutPortNum : getPortNumber(targetPortName);
-                if (thisOutPortNum == -1)
-                {
-                    cout << "Error: MIDI output port \"" << targetPortName << "\" not found!\n";
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-                
-                cout << "Opening port: " << thisOutPortNum << "\n";
-                // Attempt to open midi output
-                try {
-                    midiout->openPort(thisOutPortNum);
-                }
-                catch ( RtMidiError &error ) {
-                    cout << "**ERROR**\n";
-                    error.printMessage();
-                    appState = FINISH_ERROR_OTHER;
-                    break;
-                }
-
-                // try {
-                //     midiout->sendMessage( &sysexPayload );
-                // }
-                // catch ( RtMidiError &error ) {
-                //     cout << "**ERROR**\n";
-                //     error.printMessage();
-                //     appState = FINISH_ERROR_OTHER;
-                //     break;
-                // }
-                // appState = FINISH_ERROR_OTHER;
-                // break;
-                
-                cout << "Appending Firmware packet to payload - size: " << sysexPayload.size() << "\n";
-                packet.insert(packet.end(), sysexPayload.begin(), sysexPayload.end());
-                
-                appState = FW_SENT_WAIT;
-                break;
-
-            case FW_SENT_WAIT:
-                break;
-
-            case FINISH_ERROR_OTHER: 
-                cout << "ERROR - OTHER\n";
-            case FINISH_NO_ERR:
-                cout << "Exiting app.\n";
-                delete midiout;
-                return 0; // close app
-                break;
-            default:
-                break;
-        
-        }
-    }
-}
-
-// this function is called every 1ms
-void slotEmptyMIDIBuffer()
-{
-    std::vector<unsigned char> message;
-    static bool sendLastChunk = false;
-
-    if (packet.size() == 0)
-    {
-        return;
-    }
-
-    if (packet.size() > MAX_MIDI_SYSEX_SIZE)
-    {
-        cout << "ERROR: SYSEX TX BUFFER OVERFLOW, DISCARDING";
-        packet.clear();
-        return;
-    }
-
-    // send sysex in chunks
-    if (packet.size() > sysExTxChunkSize || sendLastChunk == true)
-    {
-        unsigned int sizeToSend = sendLastChunk ? (unsigned int)packet.size() : sysExTxChunkSize;
-
-        cout << "Sending SysEx: " << sizeToSend << "/" << packet.size() << " bytes, current\n";
-        // Create a sub-vector for the chunk to send
-        std::vector<uint8_t> chunkToSend(packet.begin(), packet.begin() + sizeToSend);
-
-        // Send the chunk
-        try
-        {
-            midiout->sendMessage(&chunkToSend);
-        }
-        catch (RtMidiError &error)
-        {
-            cout << "MIDI SEND LARGE SYSEX ERR";
-            packet.clear();
-            appState = FINISH_ERROR_OTHER;
-            return;
-        }
-
-        if (sendLastChunk) // if we just sent the last chunk, clear flag/buffer and exit
-        {
-            sendLastChunk = false;
-            packet.clear();
-
-            appState = FINISH_NO_ERR;
-            return;
-        }
-
-        // Remove the sent chunk from the packet
-        packet.erase(packet.begin(), packet.begin() + sizeToSend);
-
-
-        if (packet.size() < sysExTxChunkSize) // if we have one chunk left, loop around and send it
-        {
-            sendLastChunk = true;
-        }
-        return;
-    }
-    else
-    {
-        for (size_t i = 0; i < packet.size(); ++i)
-        {
-            
-            if (packet[i] == MIDI_SX_START) // small sysex, less than chunk size
-            {
-                cout << "Sending Small SysEx: " << packet.size() << "\n";
-                std::vector<unsigned char> smallSysExPacket;
-
-                bool stopSearch = false;
-
-                while (!stopSearch)
-                {
-                    smallSysExPacket.push_back(packet[i++]);
-
-                    if (packet[i] == MIDI_SX_STOP || i >= packet.size())
-                    {
-                        stopSearch = true;
-                    }
-                    else if (packet[i] > 127)
-                    {
-                        i--; // decrement index so the next loop looks at this byte
-                        stopSearch = true;
-                    }
-                }
-                smallSysExPacket.push_back(MIDI_SX_STOP); // always end sysex properly even if packet is incomplete
-
-                try
-                {
-                    midiout->sendMessage( &smallSysExPacket );
-                }
-                catch (RtMidiError &error)
-                {
-                    cout << "MIDI SEND SMALL SYSEX ERR: " << error.getMessage();
-                    packet.clear();
-                    appState = FINISH_ERROR_OTHER;
-                    return;
-                }
-                cout << "Sent Small SysEx";
-                appState = FINISH_NO_ERR;
-                return;
-            }
-            else // channel messages
-            {   
-                cout << "Sending Channel Message: " << i << "/" << packet.size() << "\n";
-                // Check if the current byte is a status byte
-                if (packet[i] >= 0x80)
-                {
-                    
-                    // If there's already a message being constructed, send it
-                    if (!message.empty())
-                    {
-                        try
-                        {
-                            midiout->sendMessage( &message );
-                        }
-                        catch (RtMidiError &error)
-                        {
-                            cout << "MIDI SEND PACKET ERR: " << error.getMessage();
-                        }
-                        message.clear(); // Clear the message vector for the next message
-                    }
-                }
-            }
-
-            // Add the current byte to the message
-            message.push_back(packet[i]);
-
-            // If it's the last byte but not a status byte, ensure the message is sent
-            if (i == packet.size() - 1 && !message.empty())
-            {
-                cout << "Last Byte: " << packet.size() << "\n";
-                try
-                {
-                    midiout->sendMessage( &message );
-                }
-                catch (RtMidiError &error)
-                {
-                   cout << "MIDI SEND PACKET ERR: " << error.getMessage();
-                }
-                cout << "Sent Channel Msg";
-                appState = FINISH_NO_ERR;
-                return;
-            }
-        }
-    }
-
-    // Clear the packet after processing all messages
-    packet.clear();
+    return runManualProcess(options);
 }

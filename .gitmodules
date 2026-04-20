@@ -1,3 +1,12 @@
 [submodule "inc/rtmidi"]
 	path = inc/rtmidi
-	url = git@github.com:thestk/rtmidi.git
+	url = https://github.com/thestk/rtmidi.git
+[submodule "lib/MIDI_CPP"]
+	path = lib/MIDI_CPP
+	url = git@github.com:Muse-Kinetics/midi_cpp.git
+[submodule "lib/syxMfg"]
+	path = lib/syxMfg
+	url = git@github.com:insolace/MIDI-Sysex-MFG-IDs.git
+[submodule "lib/json"]
+	path = lib/json
+	url = https://github.com/nlohmann/json.git

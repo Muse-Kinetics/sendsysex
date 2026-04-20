@@ -1,0 +1,73 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "quneo",
+  "name": "QuNeo",
+  "summary": "Single-port family. Older firmware used QUNEO in all caps; newer firmware uses QuNeo. Bootloader is indicated by PID MSB = 1.",
+  "discovery": {
+    "familyMarkers": ["QUNEO", "QuNeo"],
+    "safeProbeRoles": {
+      "application": ["main"],
+      "bootloader": ["bootloader", "main"]
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [30],
+    "bootloaderPidLsb": [30],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/QuNeo/QuNeo_enter_bootloader.syx",
+      "notes": ["Requests a reboot into bootloader mode for QuNeo devices."]
+    },
+    {
+      "id": "firmware_1_2_31",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.2.31",
+      "path": "syx/QuNeo/Quneo_Firmware_v1.2.31.syx",
+      "default": true,
+      "latest": true,
+      "notes": ["Preferred current QuNeo firmware payload."]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["QuNeo", "QUNEO"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "main" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main" }
+        ]
+      }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "productStrings": ["QuNeo", "QUNEO"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "kboard",
+  "name": "K-Board",
+  "summary": "Single-port family whose application and bootloader both report as K-Board; bootloader state is distinguished by PID MSB = 1.",
+  "discovery": {
+    "familyMarkers": ["K-Board"],
+    "safeProbeRoles": {
+      "application": ["main"],
+      "bootloader": ["bootloader"]
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [26],
+    "bootloaderPidLsb": [26],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/K-Board/K-Board_EnterBootloader.syx",
+      "notes": ["Requests a reboot into bootloader mode while the device still reports as K-Board."]
+    },
+    {
+      "id": "firmware_1_2_1",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.2.1",
+      "path": "syx/K-Board/K-Board Firmware v1.2.1.syx",
+      "default": true,
+      "latest": true,
+      "notes": ["Preferred current K-Board firmware payload."]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["K-Board"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "main" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main" }
+        ]
+      }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "productStrings": ["K-Board"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      },
+      "notes": [
+        "Bootloader uses the same reported product string as the application; confirm state via PID MSB = 1."
+      ]
+    }
+  ]
+}

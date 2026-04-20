@@ -1,0 +1,60 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default",
+      "description": "Use the platform default CMake generator",
+      "binaryDir": "${sourceDir}/build"
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC x64",
+      "description": "Build with Visual Studio 2022 or Build Tools",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "RTMIDI_WINDOWS_API": "winmm"
+      }
+    },
+    {
+      "name": "windows-uwp",
+      "displayName": "Windows UWP x64",
+      "description": "Build with the RtMidi UWP backend",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "binaryDir": "${sourceDir}/build-uwp",
+      "cacheVariables": {
+        "RTMIDI_WINDOWS_API": "uwp"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "release",
+      "configurePreset": "default",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-uwp-release",
+      "configurePreset": "windows-uwp",
+      "configuration": "Release"
+    }
+  ]
+}

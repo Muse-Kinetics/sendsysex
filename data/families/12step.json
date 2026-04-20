@@ -1,0 +1,124 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "12step",
+  "name": "12 Step",
+  "summary": "Covers original 12 Step hardware, the dedicated bootloader added in firmware 1.0.0, and the newer 12 Step2 hardware with named ports.",
+  "discovery": {
+    "familyMarkers": ["12Step", "12 Step", "12 Step2", "12 Step Bootloader"],
+    "safeProbeRoles": {
+      "application": ["control_surface", "port1"],
+      "bootloader": ["bootloader"]
+    },
+    "avoidProbeRoles": ["trs_midi_out", "cv_out"]
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [20, 22],
+    "bootloaderPidLsb": [21],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/12Step/12Step-enter-bootloader.syx",
+      "hardware": ["12step1", "12step2"],
+      "notes": ["Requests a reboot from the running application into bootloader mode."]
+    },
+    {
+      "id": "bootloader_installer_legacy",
+      "type": "bootloader_installer",
+      "targetState": "application",
+      "version": "0.9.9",
+      "path": "syx/12Step/12Step99-TrojanBootloader.syx",
+      "hardware": ["12step1"],
+      "notes": ["Helps legacy units gain access to the dedicated bootloader flow."]
+    },
+    {
+      "id": "firmware_1_0_7",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.7",
+      "path": "syx/12Step/12Step_Firmware_v1.0.7.syx",
+      "hardware": ["12step1", "12step2"],
+      "default": true,
+      "latest": true,
+      "notes": ["Preferred current 12 Step firmware payload."]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "legacy_application",
+      "state": "application",
+      "hardware": ["12step1"],
+      "firmware": { "maxExclusive": "1.0.0" },
+      "productStrings": ["12Step"],
+      "portLayout": {
+        "style": "unnamed_ordered",
+        "inputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" }
+        ]
+      }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "firmware": { "minInclusive": "1.0.0" },
+      "productStrings": ["12 Step Bootloader"],
+      "portLayout": {
+        "style": "unnamed_single_port",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      }
+    },
+    {
+      "id": "post_bootloader_application",
+      "state": "application",
+      "hardware": ["12step1"],
+      "firmware": { "minInclusive": "1.0.0" },
+      "productStrings": ["12 Step"],
+      "portLayout": {
+        "style": "unnamed_ordered",
+        "inputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface" },
+          { "index": 2, "role": "expander" }
+        ]
+      }
+    },
+    {
+      "id": "12step2_application",
+      "state": "application",
+      "hardware": ["12step2"],
+      "productStrings": ["12 Step2"],
+      "portLayout": {
+        "style": "named",
+        "inputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "trs_midi_out", "name": "TRS MIDI Out" },
+          { "index": 3, "role": "cv_out", "name": "CV Out"}
+        ]
+      }
+    }
+  ]
+}
