@@ -18,6 +18,27 @@
 
 namespace
 {
+
+// ---------------------------------------------------------------------------
+// Prints a user-facing message when the Windows MIDI Services SDK runtime is
+// not installed.  In a GUI application, show a modal dialog with the same
+// text and an "Open download page" button pointing to installUrl.
+// ---------------------------------------------------------------------------
+static void printSdkInstallPrompt(const std::string &message,
+                                   const std::string &installUrl)
+{
+    std::cout << "\n";
+    std::cout << "=================================================================\n";
+    std::cout << "  Windows MIDI Services SDK runtime not installed\n";
+    std::cout << "=================================================================\n";
+    std::cout << "  " << message << "\n";
+    if (!installUrl.empty())
+        std::cout << "  Download: " << installUrl << "\n";
+    std::cout << "\n";
+    std::cout << "  Run the installer then re-launch this application.\n";
+    std::cout << "=================================================================\n";
+    std::cout << "\n";
+}
 const std::size_t MAX_MIDI_SYSEX_SIZE = 250000;
 const unsigned int DEFAULT_CHUNK_SIZE = 48;
 const unsigned int DEFAULT_CHUNK_DELAY_MS = 2;
@@ -368,7 +389,10 @@ int runIdentityRequest(const CliOptions &options)
 
     if (device.getState() == kmiDevice::State::disconnected)
     {
-        std::cout << "ERROR: " << (device.getLastError().empty() ? "Device not found." : device.getLastError()) << "\n";
+        if (device.requiresSdkInstall())
+            printSdkInstallPrompt(device.getLastError(), device.getSdkInstallUrl());
+        else
+            std::cout << "ERROR: " << (device.getLastError().empty() ? "Device not found." : device.getLastError()) << "\n";
         return 1;
     }
 
@@ -426,7 +450,10 @@ int runAutomaticProcess(const CliOptions &options)
 
     if (!device.runAutomaticUpdate(options.chunkSize, options.chunkDelayMs, options.pollSeconds))
     {
-        std::cout << "ERROR: " << device.getLastError() << "\n";
+        if (device.requiresSdkInstall())
+            printSdkInstallPrompt(device.getLastError(), device.getSdkInstallUrl());
+        else
+            std::cout << "ERROR: " << device.getLastError() << "\n";
         return 1;
     }
 
@@ -436,6 +463,17 @@ int runAutomaticProcess(const CliOptions &options)
 
 int runManualProcess(const CliOptions &options)
 {
+#if defined(__WINDOWS_MIDI_SERVICES__)
+    {
+        RtMidi::RtMidiApiAvailability avail =
+            RtMidi::checkApiAvailability(RtMidi::WINDOWS_MIDI_SERVICES);
+        if (!avail.available)
+        {
+            printSdkInstallPrompt(avail.message, avail.installUrl);
+            return 1;
+        }
+    }
+#endif
     try
     {
         RtMidiOut midiOut;

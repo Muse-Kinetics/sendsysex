@@ -80,7 +80,8 @@ kmiDevice::kmiDevice(const std::string &familyId)
       requestedFwVersionValid_(false),
       forceFirmwareUpdate_(false),
       firmwareUpdatePending_(false),
-      pendingIdentityRequest_(false)
+      pendingIdentityRequest_(false),
+      sdkInstallRequired_(false)
 {
     syxTx_ = new SysExMessageTX();
     syxRx_ = new SysExMessageRX(0);
@@ -119,6 +120,28 @@ bool kmiDevice::refreshPorts()
     matchedOutputPorts_.clear();
     familyPresent_ = false;
     lastError_.clear();
+    sdkInstallRequired_ = false;
+    sdkInstallUrl_.clear();
+
+#if defined(__WINDOWS_MIDI_SERVICES__)
+    {
+        // Proactively check that the WMS SDK runtime DLL is installed before
+        // creating any RtMidi objects.  This prevents a cascade of stderr
+        // messages from every object construction and gives the application a
+        // clean, queryable signal (requiresSdkInstall() / getSdkInstallUrl()).
+        RtMidi::RtMidiApiAvailability avail =
+            RtMidi::checkApiAvailability(RtMidi::WINDOWS_MIDI_SERVICES);
+        if (!avail.available)
+        {
+            sdkInstallRequired_ = true;
+            sdkInstallUrl_      = avail.installUrl;
+            lastError_          = avail.message;
+            closeCommsPorts();
+            state_ = State::disconnected;
+            return false;
+        }
+    }
+#endif
 
     if (!database_.isLoaded() && !database_.loadFamily(familyId_))
     {
@@ -305,6 +328,8 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
         std::this_thread::sleep_for(std::chrono::seconds(pollIntervalSeconds));
 
         refreshPorts();
+        if (identityMetadata_.received)
+            printIdentityMetadata();
         if (state_ == State::disconnected)
             continue;
 
@@ -347,6 +372,8 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             std::this_thread::sleep_for(std::chrono::seconds(pollIntervalSeconds));
 
             refreshPorts();
+            if (identityMetadata_.received)
+                printIdentityMetadata();
             if (state_ != State::bootloader)
                 continue;
 
@@ -370,10 +397,17 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
         std::this_thread::sleep_for(std::chrono::seconds(pollIntervalSeconds));
 
         refreshPorts();
+        if (identityMetadata_.received)
+            printIdentityMetadata();
         if (state_ == State::connected)
         {
             std::cout << "Found application port: " << activeOutputPortName_ << "\n";
             return true;
+        }
+        if (state_ == State::bootloader)
+        {
+            lastError_ = "Firmware sent, but device is still in bootloader mode (flash may have failed).";
+            return false;
         }
     }
 
@@ -427,6 +461,16 @@ bool kmiDevice::getPayloadPath(const std::string &payloadType, const version_t *
 const std::string &kmiDevice::getLastError() const
 {
     return lastError_;
+}
+
+bool kmiDevice::requiresSdkInstall() const
+{
+    return sdkInstallRequired_;
+}
+
+const std::string &kmiDevice::getSdkInstallUrl() const
+{
+    return sdkInstallUrl_;
 }
 
 bool kmiDevice::sendFileToOpenPort(RtMidiOut &midiOut,
@@ -812,6 +856,12 @@ bool kmiDevice::openTransferOutputByName(const std::string &portName)
     try
     {
         transferOut_ = new RtMidiOut();
+        transferOut_->setErrorCallback(
+            [](RtMidiError::Type /*type*/, const std::string &errorText, void *userData) {
+                std::cout << "MIDI error: " << errorText << "\n";
+                static_cast<kmiDevice *>(userData)->lastError_ = errorText;
+            },
+            this);
         const unsigned int numPorts = transferOut_->getPortCount();
         const std::string normalizedRequest = database_.normalizePortName(portName);
 

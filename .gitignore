@@ -47,3 +47,5 @@ cmake-build-release/
 *.log
 
 build-uwp/
+build_winmidi2/
+build_winmidi2_com/

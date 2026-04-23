@@ -8,8 +8,9 @@
 #include "MIDI_device_metadata.hpp"
 #include "deviceDatabase.h"
 
-class RtMidiIn;
-class RtMidiOut;
+namespace rt { namespace midi { class RtMidiIn; class RtMidiOut; } }
+using rt::midi::RtMidiIn;
+using rt::midi::RtMidiOut;
 class SysExMessageTX;
 class SysExMessageRX;
 class MidiBytestreamParser;
@@ -52,6 +53,13 @@ public:
     const std::string &getActiveOutputPortName() const;
     bool getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path) const;
     const std::string &getLastError() const;
+
+    //! True when the last refreshPorts() call failed because the Windows MIDI
+    //! Services SDK runtime is not installed on this machine.
+    bool requiresSdkInstall() const;
+
+    //! The installer download URL when requiresSdkInstall() is true, otherwise empty.
+    const std::string &getSdkInstallUrl() const;
     void printPortTranslations() const;
     void printIdentityMetadata() const;
     static int findOutputPortNumberByName(RtMidiOut &midiOut, const std::string &requestedName);
@@ -110,6 +118,8 @@ private:
     std::string activeInputPortName_;
     std::string activeOutputPortName_;
     std::string lastError_;
+    bool sdkInstallRequired_ = false;
+    std::string sdkInstallUrl_;
     IdentityMetadata identityMetadata_;
     version_t requestedFwVersion_ = {0, 0, 0, 0};
     bool requestedFwVersionValid_;

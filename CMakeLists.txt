@@ -10,8 +10,8 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(WIN32)
-    set(RTMIDI_WINDOWS_API "winmm" CACHE STRING "RtMidi Windows API backend: winmm or uwp")
-    set_property(CACHE RTMIDI_WINDOWS_API PROPERTY STRINGS winmm uwp)
+    set(RTMIDI_WINDOWS_API "winmm" CACHE STRING "RtMidi Windows API backend: winmm, uwp, or winmidi2")
+    set_property(CACHE RTMIDI_WINDOWS_API PROPERTY STRINGS winmm uwp winmidi2)
     string(TOLOWER "${RTMIDI_WINDOWS_API}" RTMIDI_WINDOWS_API)
 endif()
 
@@ -56,8 +56,33 @@ elseif(WIN32)
         set_property(TARGET SendSysEx PROPERTY CXX_STANDARD 17)
         target_compile_definitions(SendSysEx PRIVATE __WINDOWS_UWP__)
         target_link_libraries(SendSysEx PRIVATE windowsapp)
+    elseif(RTMIDI_WINDOWS_API STREQUAL "winmidi2")
+        set_property(TARGET SendSysEx PROPERTY CXX_STANDARD 17)
+        target_compile_definitions(SendSysEx PRIVATE __WINDOWS_MIDI_SERVICES__)
+
+        option(RTMIDI_USE_WMS_COM_RAW
+            "Use IMidiEndpointConnectionRaw (COM, zero-allocation) instead of WinRT SendMultipleMessagesWordArray"
+            OFF)
+        if(RTMIDI_USE_WMS_COM_RAW)
+            target_compile_definitions(SendSysEx PRIVATE RTMIDI_USE_WMS_COM_RAW)
+        endif()
+
+        # cppwinrt: generate in-box WinRT headers (must run before SDK headers are included)
+        find_package(cppwinrt CONFIG REQUIRED)
+
+        # Windows MIDI Services app SDK
+        find_package(microsoft-windows-devices-midi2 CONFIG REQUIRED)
+
+        target_link_libraries(SendSysEx PRIVATE
+            Microsoft::Windows::Devices::Midi2
+            OneCoreUap.lib
+        )
+
+        # Bootstrapper header is installed by vcpkg alongside the SDK headers
+        # (include/winmidi/init/Microsoft.Windows.Devices.Midi2.Initialization.hpp)
+        # No extra include_directories needed — vcpkg wires the include root automatically.
     else()
-        message(FATAL_ERROR "Unsupported RTMIDI_WINDOWS_API='${RTMIDI_WINDOWS_API}'. Use 'winmm' or 'uwp'.")
+        message(FATAL_ERROR "Unsupported RTMIDI_WINDOWS_API='${RTMIDI_WINDOWS_API}'. Use 'winmm', 'uwp', or 'winmidi2'.")
     endif()
 endif()
 

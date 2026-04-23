@@ -497,8 +497,18 @@ std::string deviceDatabase::normalizeCoreAudioMIDI(const std::string &raw) const
         }
     }
 
-    // No trailing index: the full string is the canonical name (named USB descriptor).
-    return toLowerCopy(work);
+    // No trailing index: the full string is either a named USB descriptor
+    // ("QuNexus Control Surface") or a bare device name ("QuNexus") that
+    // represents port 1.  Check knownPorts_ first; if found it's a named
+    // descriptor and the lowercase form is already canonical.  Otherwise
+    // treat it as a bare device name at device port 1.
+    const std::string candidate = toLowerCopy(work);
+    for (std::size_t i = 0; i < knownPorts_.size(); ++i)
+        if (knownPorts_[i].normalizedName == candidate)
+            return candidate;
+
+    // Not a recognised named descriptor — bare device name, port 1.
+    return lookupByIndex(candidate, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +583,11 @@ std::string deviceDatabase::normalizePortName(const std::string &rawPortName) co
         case RtMidi::WINDOWS_UWP:
             return normalizeWinUWP(rawPortName);
         case RtMidi::MACOSX_CORE:
+        case RtMidi::WINDOWS_MIDI_SERVICES:
+            // WMS GTB port names are fully qualified named descriptors (e.g. "QuNexus Control
+            // Surface") that match CoreMIDI names on macOS exactly.  Both backends use the
+            // same normalization: lowercase the named descriptor directly; fall back to
+            // lookupByIndex only for the rare "ProductName Port N" unnamed form.
             return normalizeCoreAudioMIDI(rawPortName);
         case RtMidi::LINUX_ALSA:
         case RtMidi::UNIX_JACK:
