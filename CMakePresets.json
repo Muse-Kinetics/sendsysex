@@ -8,6 +8,37 @@
       "binaryDir": "${sourceDir}/build"
     },
     {
+      "name": "macos-coremidi",
+      "displayName": "macOS CoreMIDI",
+      "description": "Build with the CoreMIDI backend on macOS",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
+    },
+    {
+      "name": "macos-coremidi-xcode",
+      "displayName": "macOS CoreMIDI (Xcode)",
+      "description": "Build with the CoreMIDI backend on macOS using the Xcode generator",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/build-xcode",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
+    },
+    {
       "name": "windows-msvc",
       "displayName": "Windows MSVC x64",
       "description": "Build with Visual Studio 2022 or Build Tools",
@@ -44,6 +75,16 @@
     {
       "name": "release",
       "configurePreset": "default",
+      "configuration": "Release"
+    },
+    {
+      "name": "macos-coremidi",
+      "configurePreset": "macos-coremidi",
+      "configuration": "Release"
+    },
+    {
+      "name": "macos-coremidi-xcode",
+      "configurePreset": "macos-coremidi-xcode",
       "configuration": "Release"
     },
     {

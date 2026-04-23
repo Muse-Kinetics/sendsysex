@@ -583,7 +583,9 @@ std::string deviceDatabase::normalizePortName(const std::string &rawPortName) co
         case RtMidi::WINDOWS_UWP:
             return normalizeWinUWP(rawPortName);
         case RtMidi::MACOSX_CORE:
+#ifdef __WINDOWS_MIDI_SERVICES__
         case RtMidi::WINDOWS_MIDI_SERVICES:
+#endif
             // WMS GTB port names are fully qualified named descriptors (e.g. "QuNexus Control
             // Surface") that match CoreMIDI names on macOS exactly.  Both backends use the
             // same normalization: lowercase the named descriptor directly; fall back to

@@ -1,6 +1,6 @@
 [submodule "inc/rtmidi"]
 	path = inc/rtmidi
-	url = https://github.com/thestk/rtmidi.git
+	url = git@github.com:Muse-Kinetics/rtmidi.git
 [submodule "lib/MIDI_CPP"]
 	path = lib/MIDI_CPP
 	url = git@github.com:Muse-Kinetics/midi_cpp.git
