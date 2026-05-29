@@ -1,0 +1,41 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "mimic_hub",
+  "name": "Mimic Hub",
+  "summary": "KMI Mimic Hub — LPC55S16-based USB HID input bridge with MIDI device output.",
+  "discovery": {
+    "familyMarkers": ["Mimic Hub MIDI", "Mimic Hub"],
+    "safeProbeRoles": {
+      "application": ["main"],
+      "bootloader": []
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [50],
+    "bootloaderPidLsb": [],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "payloads": [],
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["Mimic Hub MIDI"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "main" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main" }
+        ]
+      }
+    }
+  ]
+}
