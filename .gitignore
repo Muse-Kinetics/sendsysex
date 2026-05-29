@@ -49,3 +49,6 @@ cmake-build-release/
 build-uwp/
 build_winmidi2/
 build_winmidi2_com/
+
+### Local SDK source checkout (not project dependency)
+lib/midi2/

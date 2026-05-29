@@ -1,0 +1,16 @@
+name: Send SysEx
+description: "Command-line SysEx sender with active work focused on a stable RtMidi backend for Windows MIDI Services (winmidi2/WMS)."
+repository: "c:\\Users\\temp\\Documents\\00_Firmware\\_utilities\\sendsysex"
+status: "active"
+phase: "stabilization"
+owner: Eric Bateman <eric@musekinetics.com>
+created: "2026-05-25"
+last_updated: "2026-05-28"
+peer_buddies: []
+tags:
+	- windows
+	- midi
+	- sysex
+	- rtmidi
+	- winmidi2
+	- wms
