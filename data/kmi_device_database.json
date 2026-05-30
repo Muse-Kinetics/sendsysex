@@ -42,6 +42,7 @@
     { "id": "12step", "name": "12 Step", "file": "families/12step.json" },
     { "id": "kboard", "name": "K-Board", "file": "families/kboard.json" },
     { "id": "kbp4", "name": "K-Board Pro 4", "file": "families/kbp4.json" },
+    { "id": "boppad", "name": "BopPad", "file": "families/boppad.json" },
     { "id": "mimic_hub", "name": "Mimic Hub", "file": "families/mimichub.json" }
   ]
 }

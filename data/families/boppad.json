@@ -1,0 +1,40 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "boppad",
+  "name": "BopPad",
+  "summary": "Single-port family. Application reports SysEx product ID LSB 117 (0x75); bootloader state is distinguished by PID MSB = 1.",
+  "discovery": {
+    "familyMarkers": ["BopPad"],
+    "safeProbeRoles": {
+      "application": ["main"],
+      "bootloader": ["bootloader", "main"]
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [117],
+    "bootloaderPidLsb": [],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["BopPad"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "main" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main" }
+        ]
+      }
+    }
+  ]
+}
