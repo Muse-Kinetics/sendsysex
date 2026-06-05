@@ -14,7 +14,7 @@
   },
   "identity": {
     "manufacturerId": [0, 1, 95],
-    "applicationPidLsb": [50],
+    "applicationPidLsb": [61],
     "bootloaderPidLsb": [],
     "stateDetection": {
       "applicationPidMsb": 0,
