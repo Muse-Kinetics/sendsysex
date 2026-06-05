@@ -264,7 +264,9 @@ bool kmiDevice::setFwVersion(const version_t &version, bool forceUpdate)
     return true;
 }
 
-bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDelayMs, unsigned int pollIntervalSeconds)
+bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDelayMs,
+                                   unsigned int pollIntervalSeconds,
+                                   unsigned int postDelayMs)
 {
     if (!requestedFwVersionValid_)
     {
@@ -316,7 +318,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware"))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs))
                 return false;
 
             firmwareSent = true;
@@ -338,7 +340,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
 
         const std::string applicationPort = activeOutputPortName_;
         disconnect();
-        if (!sendPayloadFileToPort(bootloaderEntryPath, applicationPort, chunkSize, chunkDelayMs, "bootloader-entry"))
+        if (!sendPayloadFileToPort(bootloaderEntryPath, applicationPort, chunkSize, chunkDelayMs, "bootloader-entry", postDelayMs))
             return false;
 
         while (true)
@@ -356,7 +358,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware"))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs))
                 return false;
 
             firmwareSent = true;
@@ -435,7 +437,8 @@ bool kmiDevice::sendFileToOpenPort(RtMidiOut &midiOut,
                                    unsigned int chunkSize,
                                    unsigned int chunkDelayMs,
                                    std::string &errorMessage,
-                                   bool sendAsSingleMessage)
+                                   bool sendAsSingleMessage,
+                                   unsigned int postDelayMs)
 {
     std::vector<unsigned char> bytes;
     if (!readBinaryFile(filePath, bytes, &errorMessage))
@@ -481,6 +484,14 @@ bool kmiDevice::sendFileToOpenPort(RtMidiOut &midiOut,
 
         std::cout << "Successfully sent \"" << filePath << "\" to MIDI OUT port: "
                   << portName << ", size: " << bytes.size() << " bytes.\n";
+
+        /* Hold the port open briefly so the receiver's USB driver can drain any
+         * final NAK'd packets before the port is closed.  Without this delay the
+         * CoreMIDI IOUSBKit layer cancels pending transfers on closePort(), which
+         * can silently drop the SysEx F7 terminator. */
+        if (postDelayMs > 0U)
+            std::this_thread::sleep_for(std::chrono::milliseconds(postDelayMs));
+
         return true;
     }
     catch (RtMidiError &error)
@@ -855,7 +866,8 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
                                       const std::string &portName,
                                       unsigned int chunkSize,
                                       unsigned int chunkDelayMs,
-                                      const std::string &label)
+                                      const std::string &label,
+                                      unsigned int postDelayMs)
 {
     // On Windows, the WinMM driver may reject the first sendMessage on a
     // freshly opened port immediately after a device reboot (MMRESULT=1),
@@ -885,7 +897,8 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
                                                         chunkSize,
                                                         chunkDelayMs,
                                                         lastError_,
-                                                        label != "firmware");
+                                                        label != "firmware",
+                                                        postDelayMs);
         closeTransferPort();
 
         if (sent)

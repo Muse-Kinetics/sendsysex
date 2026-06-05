@@ -8,8 +8,9 @@
 #include "MIDI_device_metadata.hpp"
 #include "deviceDatabase.h"
 
-class RtMidiIn;
-class RtMidiOut;
+namespace rt { namespace midi { class RtMidiIn; class RtMidiOut; } }
+using rt::midi::RtMidiIn;
+using rt::midi::RtMidiOut;
 class SysExMessageTX;
 class SysExMessageRX;
 class MidiBytestreamParser;
@@ -44,7 +45,9 @@ public:
     void disconnect();
     bool setFwVersion(const version_t &version, bool forceUpdate);
     bool setDefaultFwVersion(bool forceUpdate);
-    bool runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDelayMs, unsigned int pollIntervalSeconds);
+    bool runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDelayMs,
+                            unsigned int pollIntervalSeconds,
+                            unsigned int postDelayMs = 500U);
 
     State getState() const;
     bool isFirmwareUpdatePending() const;
@@ -62,7 +65,8 @@ public:
                                    unsigned int chunkSize,
                                    unsigned int chunkDelayMs,
                                    std::string &errorMessage,
-                                   bool sendAsSingleMessage = false);
+                                   bool sendAsSingleMessage = false,
+                                   unsigned int postDelayMs = 500U);
 
 private:
     bool scanPorts(std::vector<std::string> &inputPorts,
@@ -80,7 +84,8 @@ private:
                                const std::string &portName,
                                unsigned int chunkSize,
                                unsigned int chunkDelayMs,
-                               const std::string &label);
+                               const std::string &label,
+                               unsigned int postDelayMs = 500U);
     void processIncomingMessage(const std::vector<unsigned char> &message);
     void handleIdentityStateUpdate();
     void clearIdentityMetadata();

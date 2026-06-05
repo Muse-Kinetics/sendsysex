@@ -40,6 +40,9 @@ struct CliOptions
     unsigned int chunkSize = DEFAULT_CHUNK_SIZE;
     unsigned int chunkDelayMs = DEFAULT_CHUNK_DELAY_MS;
     unsigned int pollSeconds = DEFAULT_POLL_SECONDS;
+    unsigned int postDelayMs = 500U;
+    bool blEraseRebootCmd = false;
+    int blPid = -1;
 };
 
 
@@ -55,9 +58,9 @@ void printHelp()
         << "\nUsage:\n"
         << "  SendSysEx -l\n"
         << "  SendSysEx --list-normalized [family]\n"
-        << "  SendSysEx -p <port-number> -f <file.syx> [-cs <bytes>] [-cd <ms>]\n"
-        << "  SendSysEx -n <raw-port-name> -f <file.syx> [-cs <bytes>] [-cd <ms>]\n"
-        << "  SendSysEx --fw-update <family> [--fw-version <version>] [-t <seconds>] [-cs <bytes>] [-cd <ms>]\n"
+        << "  SendSysEx -p <port-number> -f <file.syx> [-cs <bytes>] [-cd <ms>] [-pd <ms>]\n"
+        << "  SendSysEx -n <raw-port-name> -f <file.syx> [-cs <bytes>] [-cd <ms>] [-pd <ms>]\n"
+        << "  SendSysEx --fw-update <family> [--fw-version <version>] [-t <seconds>] [-cs <bytes>] [-cd <ms>] [-pd <ms>]\n"
         << "  SendSysEx --id-request <family> [-t <seconds>]\n"
         << "\nRaw send mode:\n"
         << "  -l                         List all raw RtMidi input and output ports\n"
@@ -72,9 +75,12 @@ void printHelp()
         << "  --id-request <family>      Connect, send an identity request, print the reply, then exit\n"
         << "  -t <seconds>               Poll interval while waiting for the device to appear or reboot\n"
         << "\nTransfer options:\n"
-        << "  -cs, --chunk-size <bytes>  SysEx chunk size in bytes (default: 48)\n"
-        << "  -cd, --chunk-delay <ms>    Delay between chunks in milliseconds (default: 2)\n"
-        << "  -h, --help                 Show this help message\n"
+        << "  -cs, --chunk-size <bytes>   SysEx chunk size in bytes (default: 48)\n"
+        << "  -cd, --chunk-delay <ms>     Delay between chunks in milliseconds (default: 2)\n"
+        << "  -pd, --post-delay <ms>      Wait N ms after last chunk before closing port (default: 500)\n"
+        << "                              Prevents F7 loss when the receiver NAKs the final packet.\n"
+        << "                              Use 0 to disable.\n"
+        << "  -h, --help                  Show this help message\n"
         << "\nNotes:\n"
         << "  - Raw send mode uses RtMidi directly and does not normalize port names for you.\n"
         << "  - Automatic update mode uses the family database and normalized exact matching internally.\n"
@@ -85,7 +91,12 @@ void printHelp()
         << "  SendSysEx -n \"SoftStep Bootloader 1\" -f firmware.syx\n"
         << "  SendSysEx --fw-update SoftStep\n"
         << "  SendSysEx --fw-update SoftStep --fw-version 2.0.4\n"
-        << "  SendSysEx --id-request QuNexus\n\n";
+        << "  SendSysEx --id-request QuNexus\n"
+        << "  SendSysEx --send-bl-erase-reboot-cmd --pid <pid>\n\n"
+        << "Bootloader commands:\n"
+        << "  --send-bl-erase-reboot-cmd  Send a double-EOF erase+reboot command to a KMI bootloader.\n"
+        << "                              Requires --pid <pid> (decimal or 0x-prefixed hex).\n"
+        << "                              Requires -p or -n to select the MIDI output port.\n\n";
 }
 
 void listPorts(RtMidiOut &midiOut)
@@ -118,6 +129,7 @@ bool sendFileToPort(RtMidiOut &midiOut,
                     const std::string &filePath,
                     unsigned int chunkSize,
                     unsigned int chunkDelayMs,
+                    unsigned int postDelayMs,
                     std::string &errorMessage)
 {
     try
@@ -131,7 +143,9 @@ bool sendFileToPort(RtMidiOut &midiOut,
                                                         filePath,
                                                         chunkSize,
                                                         chunkDelayMs,
-                                                        errorMessage);
+                                                        errorMessage,
+                                                        false,
+                                                        postDelayMs);
         midiOut.closePort();
         return sent;
     }
@@ -279,6 +293,22 @@ CliOptions parseArguments(int argc, const char *argv[])
             }
             continue;
         }
+        if (arg == "-pd" || arg == "--post-delay")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --post-delay.";
+                return options;
+            }
+
+            if (!parseUnsignedOption(argv[++i], options.postDelayMs))
+            {
+                options.parseError = "Invalid post delay.";
+                return options;
+            }
+            continue;
+        }
         if (arg == "--fw-update")
         {
             if (i + 1 >= argc)
@@ -333,6 +363,36 @@ CliOptions parseArguments(int argc, const char *argv[])
         {
             options.automaticMode = true;
             options.versionText = arg.substr(std::string("--fw-version=").size());
+            continue;
+        }
+        if (arg == "--send-bl-erase-reboot-cmd")
+        {
+            options.blEraseRebootCmd = true;
+            continue;
+        }
+        if (arg == "--pid")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --pid.";
+                return options;
+            }
+            const std::string pidStr = argv[++i];
+            unsigned long parsed = 0;
+            try
+            {
+                std::size_t pos = 0;
+                parsed = std::stoul(pidStr, &pos, 0); // base 0: auto-detect 0x prefix
+                if (pos != pidStr.size() || parsed > 255)
+                    throw std::invalid_argument("");
+            }
+            catch (...)
+            {
+                options.parseError = "Invalid PID '" + pidStr + "'. Use a decimal or 0x-prefixed hex value 0-255.";
+                return options;
+            }
+            options.blPid = static_cast<int>(parsed);
             continue;
         }
 
@@ -424,13 +484,83 @@ int runAutomaticProcess(const CliOptions &options)
         }
     }
 
-    if (!device.runAutomaticUpdate(options.chunkSize, options.chunkDelayMs, options.pollSeconds))
+    if (!device.runAutomaticUpdate(options.chunkSize, options.chunkDelayMs, options.pollSeconds, options.postDelayMs))
     {
         std::cout << "ERROR: " << device.getLastError() << "\n";
         return 1;
     }
 
     std::cout << "Automatic update flow finished.\n";
+    return 0;
+}
+
+int runBlEraseRebootCmd(const CliOptions &options)
+{
+    if (options.blPid < 0)
+    {
+        std::cout << "ERROR: --send-bl-erase-reboot-cmd requires --pid <pid>.\n";
+        return 1;
+    }
+    if (!options.usePortNumber && options.portName.empty())
+    {
+        std::cout << "ERROR: --send-bl-erase-reboot-cmd requires -p <num> or -n <name>.\n";
+        return 1;
+    }
+
+    const unsigned char pid = static_cast<unsigned char>(options.blPid);
+
+    // Double-EOF erase+reboot payload for KMI C8051F38x bootloader.
+    // Encoding: KMI SysEx header + 4 zero pads + packet-start 0x01 +
+    // encoded preamble [START_OF_TEXT=0x0002, FIRMWARE_PACKET id=0x1110, preamble-CRC] +
+    // two encoded Intel HEX EOF records [SX_HEX_LINE_START, totalLen=7, 0x3A, 0x00,
+    // 0x00, 0x00, type=1, hex-crc=0xFF, line-CRC=0x6440] + 0xF7.
+    const std::vector<unsigned char> payload = {
+        0xF0, 0x00, 0x01, 0x5F, 0x7A, pid,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x02, 0x11, 0x10, 0x48, 0x53, 0x00, 0x30,
+        0x03, 0x07, 0x3A, 0x00, 0x00, 0x00, 0x01, 0x00, 0x7F, 0x64, 0x40,
+        0x00, 0x00, 0x00, 0x00, 0x01,
+        0x03, 0x07, 0x3A, 0x00, 0x00, 0x00, 0x01, 0x00, 0x7F, 0x64, 0x40,
+        0x00, 0x00, 0x00, 0x00, 0x01,
+        0xF7
+    };
+
+    try
+    {
+        RtMidiOut midiOut;
+        int portNumber = -1;
+        if (options.usePortNumber)
+        {
+            portNumber = options.portNumber;
+        }
+        else
+        {
+            portNumber = kmiDevice::findOutputPortNumberByName(midiOut, options.portName);
+        }
+
+        const unsigned int numOutPorts = midiOut.getPortCount();
+        if (portNumber < 0 || static_cast<unsigned int>(portNumber) >= numOutPorts)
+        {
+            std::cout << "ERROR: MIDI output port not found. Use -l to list ports.\n";
+            return 1;
+        }
+
+        const std::string portName = midiOut.getPortName(static_cast<unsigned int>(portNumber));
+        std::cout << "Sending BL erase+reboot command (PID=" << options.blPid
+                  << ") to port " << portNumber << " (" << portName << ")\n";
+        midiOut.openPort(static_cast<unsigned int>(portNumber));
+        midiOut.sendMessage(&payload);
+        if (options.postDelayMs > 0U)
+            std::this_thread::sleep_for(std::chrono::milliseconds(options.postDelayMs));
+        midiOut.closePort();
+        std::cout << "Done.\n";
+    }
+    catch (RtMidiError &error)
+    {
+        std::cout << "ERROR: " << error.getMessage() << "\n";
+        return 1;
+    }
+
     return 0;
 }
 
@@ -484,7 +614,7 @@ int runManualProcess(const CliOptions &options)
         }
 
         std::string errorMessage;
-        if (!sendFileToPort(midiOut, portNumber, options.filePath, options.chunkSize, options.chunkDelayMs, errorMessage))
+        if (!sendFileToPort(midiOut, portNumber, options.filePath, options.chunkSize, options.chunkDelayMs, options.postDelayMs, errorMessage))
         {
             std::cout << "ERROR: " << errorMessage << "\n";
             return 1;
@@ -521,13 +651,17 @@ int main(int argc, const char *argv[])
         return 0;
     }
 
-    std::cout << "Chunk size: " << options.chunkSize << " bytes, delay: " << options.chunkDelayMs << " ms\n";
+    std::cout << "Chunk size: " << options.chunkSize << " bytes, delay: " << options.chunkDelayMs
+              << " ms, post-delay: " << options.postDelayMs << " ms\n";
 
     if (options.listNormalizedOnly && options.filePath.empty() && options.versionText.empty())
         return runManualProcess(options);
 
     if (options.idRequestOnly)
         return runIdentityRequest(options);
+
+    if (options.blEraseRebootCmd)
+        return runBlEraseRebootCmd(options);
 
     if (options.automaticMode)
         return runAutomaticProcess(options);
