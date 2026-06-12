@@ -24,11 +24,32 @@ if(NOT EXISTS "${RTMIDI_DIR}/RtMidi.cpp")
     )
 endif()
 
+# Map RTMIDI_WINDOWS_API to rtmidi's API options before adding the subdirectory.
+# rtmidi's CMakeLists.txt handles all dependency discovery and linking for each backend.
+set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
+
+if(WIN32)
+    if(RTMIDI_WINDOWS_API STREQUAL "winmidi2")
+        set(RTMIDI_API_WMS   ON  CACHE BOOL "" FORCE)
+        set(RTMIDI_API_WINMM OFF CACHE BOOL "" FORCE)
+    elseif(RTMIDI_WINDOWS_API STREQUAL "winmm")
+        set(RTMIDI_API_WINMM ON  CACHE BOOL "" FORCE)
+        set(RTMIDI_API_WMS   OFF CACHE BOOL "" FORCE)
+    elseif(RTMIDI_WINDOWS_API STREQUAL "uwp")
+        set(RTMIDI_API_WINMM OFF CACHE BOOL "" FORCE)
+        set(RTMIDI_API_WMS   OFF CACHE BOOL "" FORCE)
+    else()
+        message(FATAL_ERROR "Unsupported RTMIDI_WINDOWS_API='${RTMIDI_WINDOWS_API}'. Use 'winmm', 'uwp', or 'winmidi2'.")
+    endif()
+endif()
+
+add_subdirectory(${RTMIDI_DIR} rtmidi_build)
+
 add_executable(SendSysEx
     src/SendSysEx.cpp
     src/kmiDevice.cpp
     src/deviceDatabase.cpp
-    ${RTMIDI_DIR}/RtMidi.cpp
     ${MIDI_CPP_DIR}/src/MIDI_sysex.cpp
     ${MIDI_CPP_DIR}/src/MIDI_bytestream_parser.cpp
     ${MIDI_CPP_DIR}/src/MIDI_device_metadata.cpp
@@ -41,49 +62,15 @@ target_include_directories(SendSysEx PRIVATE
     ${RTMIDI_DIR}
 )
 
-if(APPLE)
-    target_compile_definitions(SendSysEx PRIVATE __MACOSX_CORE__)
-    target_link_libraries(SendSysEx PRIVATE
-        "-framework CoreMIDI"
-        "-framework CoreAudio"
-        "-framework CoreFoundation"
-    )
-elseif(WIN32)
-    if(RTMIDI_WINDOWS_API STREQUAL "winmm")
-        target_compile_definitions(SendSysEx PRIVATE __WINDOWS_MM__)
-        target_link_libraries(SendSysEx PRIVATE winmm)
-    elseif(RTMIDI_WINDOWS_API STREQUAL "uwp")
-        set_property(TARGET SendSysEx PROPERTY CXX_STANDARD 17)
-        target_compile_definitions(SendSysEx PRIVATE __WINDOWS_UWP__)
-        target_link_libraries(SendSysEx PRIVATE windowsapp)
-    elseif(RTMIDI_WINDOWS_API STREQUAL "winmidi2")
-        set_property(TARGET SendSysEx PROPERTY CXX_STANDARD 17)
-        target_compile_definitions(SendSysEx PRIVATE __WINDOWS_MIDI_SERVICES__)
+# All backend dependencies (WinMM, WMS cppwinrt/midi2, CoreMIDI, etc.) are wired
+# by rtmidi's own CMakeLists.txt and propagated through the rtmidi target.
+target_link_libraries(SendSysEx PRIVATE rtmidi)
 
-        option(RTMIDI_USE_WMS_COM_RAW
-            "Use IMidiEndpointConnectionRaw (COM, zero-allocation) instead of WinRT SendMultipleMessagesWordArray"
-            OFF)
-        if(RTMIDI_USE_WMS_COM_RAW)
-            target_compile_definitions(SendSysEx PRIVATE RTMIDI_USE_WMS_COM_RAW)
-        endif()
-
-        # cppwinrt: generate in-box WinRT headers (must run before SDK headers are included)
-        find_package(cppwinrt CONFIG REQUIRED)
-
-        # Windows MIDI Services app SDK
-        find_package(microsoft-windows-devices-midi2 CONFIG REQUIRED)
-
-        target_link_libraries(SendSysEx PRIVATE
-            Microsoft::Windows::Devices::Midi2
-            OneCoreUap.lib
-        )
-
-        # Bootstrapper header is installed by vcpkg alongside the SDK headers
-        # (include/winmidi/init/Microsoft.Windows.Devices.Midi2.Initialization.hpp)
-        # No extra include_directories needed — vcpkg wires the include root automatically.
-    else()
-        message(FATAL_ERROR "Unsupported RTMIDI_WINDOWS_API='${RTMIDI_WINDOWS_API}'. Use 'winmm', 'uwp', or 'winmidi2'.")
-    endif()
+# UWP is not yet handled by rtmidi's cmake; keep the explicit wiring here for now.
+if(WIN32 AND RTMIDI_WINDOWS_API STREQUAL "uwp")
+    set_property(TARGET SendSysEx PROPERTY CXX_STANDARD 17)
+    target_compile_definitions(SendSysEx PRIVATE __WINDOWS_UWP__)
+    target_link_libraries(SendSysEx PRIVATE windowsapp)
 endif()
 
 install(TARGETS SendSysEx RUNTIME DESTINATION bin)
