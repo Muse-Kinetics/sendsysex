@@ -5,6 +5,8 @@
 #include "MIDI_bytestream_parser.hpp"
 #include "MIDI_sysex.hpp"
 #include "RtMidi.h"
+#include "sysExChunking.h"
+#include "chunkedSysExTransfer.h"
 
 #include <algorithm>
 #include <chrono>
@@ -108,6 +110,13 @@ kmiDevice::~kmiDevice()
     syxTx_ = 0;
 }
 
+void kmiDevice::setPortNameOverride(const std::string &appPortName, const std::string &bootloaderPortName)
+{
+    portNameOverrideActive_ = !appPortName.empty();
+    overrideAppPortName_ = appPortName;
+    overrideBootloaderPortName_ = bootloaderPortName.empty() ? appPortName : bootloaderPortName;
+}
+
 bool kmiDevice::refreshPorts()
 {
     const std::string previousActiveOutput = activeOutputPortName_;
@@ -120,7 +129,7 @@ bool kmiDevice::refreshPorts()
     familyPresent_ = false;
     lastError_.clear();
 
-    if (!database_.isLoaded() && !database_.loadFamily(familyId_))
+    if (!portNameOverrideActive_ && !database_.isLoaded() && !database_.loadFamily(familyId_))
     {
         // If the JSON file simply doesn't exist, fall back to probe-only mode:
         // match any port whose raw name contains the family id as a substring.
@@ -149,13 +158,34 @@ bool kmiDevice::refreshPorts()
         database_.setActiveApi(tempApiProbe.getCurrentApi());
     }
 
-    for (std::size_t i = 0; i < visibleInputPorts_.size(); ++i)
-        if (database_.matchesFamily(visibleInputPorts_[i]))
-            matchedInputPorts_.push_back(visibleInputPorts_[i]);
+    if (portNameOverrideActive_)
+    {
+        // Bypass family-marker/product-string matching entirely: the device
+        // (e.g. a K-Board behind a Mimic Hub) reports a port name with no
+        // relationship to its own product string, so trust the caller's
+        // explicit name(s) instead. Both the app and bootloader alias are
+        // checked since either (or both, if they're the same string) may be
+        // visible depending on what's currently attached and its state -
+        // app/bootloader disambiguation itself still happens later via the
+        // identity reply's PID MSB (handleIdentityStateUpdate()), not here.
+        for (std::size_t i = 0; i < visibleInputPorts_.size(); ++i)
+            if (visibleInputPorts_[i] == overrideAppPortName_ || visibleInputPorts_[i] == overrideBootloaderPortName_)
+                matchedInputPorts_.push_back(visibleInputPorts_[i]);
 
-    for (std::size_t i = 0; i < visibleOutputPorts_.size(); ++i)
-        if (database_.matchesFamily(visibleOutputPorts_[i]))
-            matchedOutputPorts_.push_back(visibleOutputPorts_[i]);
+        for (std::size_t i = 0; i < visibleOutputPorts_.size(); ++i)
+            if (visibleOutputPorts_[i] == overrideAppPortName_ || visibleOutputPorts_[i] == overrideBootloaderPortName_)
+                matchedOutputPorts_.push_back(visibleOutputPorts_[i]);
+    }
+    else
+    {
+        for (std::size_t i = 0; i < visibleInputPorts_.size(); ++i)
+            if (database_.matchesFamily(visibleInputPorts_[i]))
+                matchedInputPorts_.push_back(visibleInputPorts_[i]);
+
+        for (std::size_t i = 0; i < visibleOutputPorts_.size(); ++i)
+            if (database_.matchesFamily(visibleOutputPorts_[i]))
+                matchedOutputPorts_.push_back(visibleOutputPorts_[i]);
+    }
 
     familyPresent_ = !matchedInputPorts_.empty() || !matchedOutputPorts_.empty();
     if (!familyPresent_)
@@ -506,6 +536,41 @@ bool kmiDevice::sendFileToOpenPort(RtMidiOut &midiOut,
     return false;
 }
 
+// F0/F7-aware chunk detection plus the between-chunk identity handshake,
+// shared (chunkedSysExTransfer.h) with SendSysEx.cpp's manual raw-send path.
+// Unlike sendFileToOpenPort() above (a single write, or a naive fixed-size
+// byte-slice with no framing or handshake awareness - correct only for the
+// historical one-giant-message format), this is what firmware payloads
+// actually need: Hex_to_SysEx-chunked files are many independently-framed
+// F0...F7 messages, and without a handshake a dropped/corrupted chunk sends
+// silently instead of aborting.
+bool kmiDevice::sendChunkedFirmwareToPort(const std::string &filePath,
+                                          const std::string &portName,
+                                          unsigned int chunkSize,
+                                          unsigned int chunkDelayMs,
+                                          unsigned int postDelayMs)
+{
+    if (transferOut_ == 0)
+    {
+        lastError_ = "Transfer output port is not open.";
+        return false;
+    }
+
+    std::vector<unsigned char> bytes;
+    if (!readBinaryFile(filePath, bytes, &lastError_))
+        return false;
+
+    if (bytes.size() > MAX_MIDI_SYSEX_SIZE)
+    {
+        lastError_ = "SysEx file exceeds the supported send buffer size.";
+        return false;
+    }
+
+    const std::vector<SysExChunk> chunks = findSysExChunks(bytes);
+    return sendChunkedFileToPort(*transferOut_, portName, bytes, chunks,
+                                 chunkSize, chunkDelayMs, postDelayMs, lastError_);
+}
+
 void kmiDevice::clearIdentityMetadata()
 {
     identityMetadata_ = IdentityMetadata();
@@ -630,16 +695,34 @@ bool kmiDevice::scanPorts(std::vector<std::string> &inputPorts,
 
 bool kmiDevice::ensureCommsPortsForState()
 {
-    bool bootloaderByName = false;
-    for (std::size_t i = 0; i < matchedInputPorts_.size() && !bootloaderByName; ++i)
-        bootloaderByName = database_.isBootloaderPort(matchedInputPorts_[i]);
+    std::string desiredInput;
+    std::string desiredOutput;
 
-    for (std::size_t i = 0; i < matchedOutputPorts_.size() && !bootloaderByName; ++i)
-        bootloaderByName = database_.isBootloaderPort(matchedOutputPorts_[i]);
+    if (portNameOverrideActive_)
+    {
+        // matchedInputPorts_/matchedOutputPorts_ were already filtered down to
+        // just the override name(s) actually visible right now (refreshPorts());
+        // there's nothing further to disambiguate by role here. App/bootloader
+        // state itself comes from the identity reply's PID MSB, not from which
+        // override name happened to match.
+        if (!matchedInputPorts_.empty())
+            desiredInput = matchedInputPorts_.front();
+        if (!matchedOutputPorts_.empty())
+            desiredOutput = matchedOutputPorts_.front();
+    }
+    else
+    {
+        bool bootloaderByName = false;
+        for (std::size_t i = 0; i < matchedInputPorts_.size() && !bootloaderByName; ++i)
+            bootloaderByName = database_.isBootloaderPort(matchedInputPorts_[i]);
 
-    const bool bootloaderState = bootloaderByName || state_ == State::bootloader;
-    const std::string desiredInput = database_.chooseBestPort(matchedInputPorts_, bootloaderState);
-    const std::string desiredOutput = database_.chooseBestPort(matchedOutputPorts_, bootloaderState);
+        for (std::size_t i = 0; i < matchedOutputPorts_.size() && !bootloaderByName; ++i)
+            bootloaderByName = database_.isBootloaderPort(matchedOutputPorts_[i]);
+
+        const bool bootloaderState = bootloaderByName || state_ == State::bootloader;
+        desiredInput = database_.chooseBestPort(matchedInputPorts_, bootloaderState);
+        desiredOutput = database_.chooseBestPort(matchedOutputPorts_, bootloaderState);
+    }
 
     if (desiredInput.empty() || desiredOutput.empty())
     {
@@ -750,12 +833,24 @@ bool kmiDevice::openInputByName(const std::string &portName)
         midiIn_ = new RtMidiIn();
         midiIn_->ignoreTypes(false, false, false);
         const unsigned int numPorts = midiIn_->getPortCount();
-        const std::string normalizedRequest = database_.normalizePortName(portName);
+        // Override mode: match the literal reported name exactly.
+        // database_.normalizePortName() is driven by the family's registered
+        // product strings/index table (loadFamily()) - for a name with no
+        // relationship to those (e.g. "Mimic Hub MIDI Port N"), several
+        // distinct unregistered names can normalize to the same empty/
+        // fallback string and appear to "match" each other. Only trust it for
+        // names actually drawn from the family JSON.
+        const std::string normalizedRequest = portNameOverrideActive_ ? std::string() : database_.normalizePortName(portName);
 
         for (unsigned int i = 0; i < numPorts; ++i)
         {
             const std::string candidate = midiIn_->getPortName(i);
-            if (database_.normalizePortName(candidate) != normalizedRequest)
+            if (portNameOverrideActive_)
+            {
+                if (candidate != portName)
+                    continue;
+            }
+            else if (database_.normalizePortName(candidate) != normalizedRequest)
                 continue;
 
             midiIn_->openPort(i, "kmiDevice input");
@@ -787,12 +882,17 @@ bool kmiDevice::openOutputByName(const std::string &portName)
     {
         midiOut_ = new RtMidiOut();
         const unsigned int numPorts = midiOut_->getPortCount();
-        const std::string normalizedRequest = database_.normalizePortName(portName);
+        const std::string normalizedRequest = portNameOverrideActive_ ? std::string() : database_.normalizePortName(portName);
 
         for (unsigned int i = 0; i < numPorts; ++i)
         {
             const std::string candidate = midiOut_->getPortName(i);
-            if (database_.normalizePortName(candidate) != normalizedRequest)
+            if (portNameOverrideActive_)
+            {
+                if (candidate != portName)
+                    continue;
+            }
+            else if (database_.normalizePortName(candidate) != normalizedRequest)
                 continue;
 
             midiOut_->openPort(i, "kmiDevice output");
@@ -824,12 +924,17 @@ bool kmiDevice::openTransferOutputByName(const std::string &portName)
     {
         transferOut_ = new RtMidiOut();
         const unsigned int numPorts = transferOut_->getPortCount();
-        const std::string normalizedRequest = database_.normalizePortName(portName);
+        const std::string normalizedRequest = portNameOverrideActive_ ? std::string() : database_.normalizePortName(portName);
 
         for (unsigned int i = 0; i < numPorts; ++i)
         {
             const std::string candidate = transferOut_->getPortName(i);
-            if (database_.normalizePortName(candidate) != normalizedRequest)
+            if (portNameOverrideActive_)
+            {
+                if (candidate != portName)
+                    continue;
+            }
+            else if (database_.normalizePortName(candidate) != normalizedRequest)
                 continue;
 
             transferOut_->openPort(i, "kmiDevice transfer");
@@ -891,14 +996,12 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
         std::cout << "Opening port: " << portName << "\n";
         std::cout << "Sending " << label << " to port: " << portName << "\n";
 
-        const bool sent = kmiDevice::sendFileToOpenPort(*transferOut_,
-                                                        portName,
-                                                        filePath,
-                                                        chunkSize,
-                                                        chunkDelayMs,
-                                                        lastError_,
-                                                        label != "firmware",
-                                                        postDelayMs);
+        // sendChunkedFirmwareToPort() handles both single-message payloads
+        // (bootloader-entry: no handshake attempted, same as before) and
+        // multi-chunk firmware images (F0/F7-aware chunking plus the
+        // between-chunk identity handshake) transparently based on how many
+        // complete SysEx messages the file actually contains.
+        const bool sent = sendChunkedFirmwareToPort(filePath, portName, chunkSize, chunkDelayMs, postDelayMs);
         closeTransferPort();
 
         if (sent)

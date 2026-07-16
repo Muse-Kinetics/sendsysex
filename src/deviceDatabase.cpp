@@ -318,7 +318,12 @@ bool deviceDatabase::getPayloadPath(const std::string &payloadType, const versio
         {
             if (payload.value("version", std::string()) == requestedVersion)
             {
-                path = pathValue;
+                // Payload paths in the JSON are relative to the sendsysex repo
+                // root, same as the family JSON itself - resolve them the same
+                // way rather than handing back a path that only works when the
+                // caller's CWD happens to already be the repo root.
+                const std::string resolved = resolveDataPath(pathValue);
+                path = resolved.empty() ? pathValue : resolved;
                 return true;
             }
             continue;
@@ -332,9 +337,9 @@ bool deviceDatabase::getPayloadPath(const std::string &payloadType, const versio
             defaultMatch = pathValue;
     }
 
-    if (!latestMatch.empty())  { path = latestMatch;  return true; }
-    if (!defaultMatch.empty()) { path = defaultMatch; return true; }
-    if (!firstMatch.empty())   { path = firstMatch;   return true; }
+    if (!latestMatch.empty())  { const std::string r = resolveDataPath(latestMatch);  path = r.empty() ? latestMatch  : r; return true; }
+    if (!defaultMatch.empty()) { const std::string r = resolveDataPath(defaultMatch); path = r.empty() ? defaultMatch : r; return true; }
+    if (!firstMatch.empty())   { const std::string r = resolveDataPath(firstMatch);   path = r.empty() ? firstMatch   : r; return true; }
     return false;
 }
 

@@ -41,6 +41,19 @@ public:
     explicit kmiDevice(const std::string &familyId);
     ~kmiDevice();
 
+    // Overrides port discovery entirely for devices whose reported MIDI port
+    // name has no relationship to the family's product-string/role table --
+    // e.g. a K-Board behind a Mimic Hub, which always reports a generic
+    // "Mimic Hub MIDI Port N" name regardless of what's attached or its
+    // app/bootloader state. When set, refreshPorts() skips family-marker
+    // matching and looks for these exact literal names instead; bootloader
+    // vs application selection still comes from the identity reply's PID MSB
+    // (unaffected by this override; see handleIdentityStateUpdate()), not
+    // from which override name matched. If bootloaderPortName is empty, it
+    // defaults to appPortName (the common case: a device like K-Board that
+    // reports the same port name in both states even on a direct connection).
+    void setPortNameOverride(const std::string &appPortName, const std::string &bootloaderPortName = std::string());
+
     bool refreshPorts();
     void disconnect();
     bool setFwVersion(const version_t &version, bool forceUpdate);
@@ -86,6 +99,11 @@ private:
                                unsigned int chunkDelayMs,
                                const std::string &label,
                                unsigned int postDelayMs = 500U);
+    bool sendChunkedFirmwareToPort(const std::string &filePath,
+                                   const std::string &portName,
+                                   unsigned int chunkSize,
+                                   unsigned int chunkDelayMs,
+                                   unsigned int postDelayMs);
     void processIncomingMessage(const std::vector<unsigned char> &message);
     void handleIdentityStateUpdate();
     void clearIdentityMetadata();
@@ -114,6 +132,9 @@ private:
 
     std::string activeInputPortName_;
     std::string activeOutputPortName_;
+    bool portNameOverrideActive_ = false;
+    std::string overrideAppPortName_;
+    std::string overrideBootloaderPortName_;
     std::string lastError_;
     IdentityMetadata identityMetadata_;
     version_t requestedFwVersion_ = {0, 0, 0, 0};

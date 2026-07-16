@@ -44,7 +44,21 @@
       "path": "syx/K-Board/K-Board Firmware v1.2.1.syx",
       "default": true,
       "latest": true,
-      "notes": ["Preferred current K-Board firmware payload."]
+      "notes": ["Preferred current production K-Board firmware payload."]
+    },
+    {
+      "id": "firmware_9_0_1",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "9.0.1",
+      "path": "syx/K-Board/K-Board Firmware v9.0.1.syx",
+      "default": false,
+      "latest": false,
+      "notes": [
+        "NOT a production release. Performance-test firmware variant (perf_test branch of k-board-firmware) that emits synthetic MIDI/SysEx traffic on command and disables physical key/bend-pad input, used to stress-test mimic_hub with up to 13 simultaneous K-Boards.",
+        "Version 9.0.1 is deliberately out of the normal release sequence so it's unmistakable in an ID reply. Select explicitly with --fw-version 9.0.1; never the implicit default.",
+        "See k-board-firmware's .buddy-project/kboard-perf-test-design.md for the full design and SYX_CMD_TEST_MODE/SYX_CMD_BURST_MODE command reference."
+      ]
     }
   ],
   "profiles": [

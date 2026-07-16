@@ -16,6 +16,8 @@
 #include "RtMidi.h"
 #include "deviceHelpers.h"
 #include "kmiDevice.h"
+#include "sysExChunking.h"
+#include "chunkedSysExTransfer.h"
 
 namespace
 {
@@ -44,6 +46,8 @@ struct CliOptions
     unsigned int postDelayMs = 500U;
     bool blEraseRebootCmd = false;
     int blPid = -1;
+    std::string appPortName;
+    std::string bootloaderPortName;
 };
 
 
@@ -75,6 +79,16 @@ void printHelp()
         << "  --fw-version <version>     Firmware version; omit to use the default from the family JSON\n"
         << "  --id-request <family>      Connect, send an identity request, print the reply, then exit\n"
         << "  -t <seconds>               Poll interval while waiting for the device to appear or reboot\n"
+        << "  --app-port <name>          Exact MIDI port name to use, bypassing family-marker port\n"
+        << "                              discovery entirely. For devices whose reported port name has\n"
+        << "                              no relationship to their own product string (e.g. a K-Board\n"
+        << "                              behind a Mimic Hub, always \"Mimic Hub MIDI Port N\" regardless\n"
+        << "                              of what's attached). App/bootloader state is still detected\n"
+        << "                              from the identity reply's PID MSB, not from this name.\n"
+        << "  --bootloader-port <name>   Exact MIDI port name to use once in bootloader mode, if\n"
+        << "                              different from --app-port. Defaults to --app-port's value\n"
+        << "                              when omitted (the common case: same port name in both states).\n"
+        << "                              Requires --app-port to also be set.\n"
         << "\nTransfer options:\n"
         << "  -cs, --chunk-size <bytes>   SysEx chunk size in bytes (default: 48)\n"
         << "  -cd, --chunk-delay <ms>     Delay between chunks in milliseconds (default: 2)\n"
@@ -99,6 +113,7 @@ void printHelp()
         << "  SendSysEx -n \"SoftStep Bootloader 1\" -f firmware.syx\n"
         << "  SendSysEx --fw-update SoftStep\n"
         << "  SendSysEx --fw-update SoftStep --fw-version 2.0.4\n"
+        << "  SendSysEx --fw-update kboard --fw-version 9.0.1 --app-port \"Mimic Hub MIDI Port 5\"\n"
         << "  SendSysEx --id-request QuNexus\n"
         << "  SendSysEx --send-bl-erase-reboot-cmd --pid <pid>\n\n"
         << "Bootloader commands:\n"
@@ -132,254 +147,16 @@ void listNormalizedPorts(const std::string &familyName)
         device.printPortTranslations();
 }
 
-// A single complete SysEx message (0xF0 ... 0xF7 inclusive) found within a file.
-struct SysExChunk
-{
-    std::size_t offset;
-    std::size_t length;
-};
+// SysExChunk and findSysExChunks() now live in sysExChunking.h, shared with
+// kmiDevice.cpp's automatic-update path (both need identical F0...F7 message-
+// boundary detection over a Hex_to_SysEx-chunked file - see that header for
+// the detection-strategy rationale).
 
-// Scans a SysEx file for one or more back-to-back, independently-framed
-// F0...F7 messages ("chunks"), as produced by Hex_to_SysEx's -cs chunked mode
-// (see Hex_to_SysEx/README.md). Payload bytes inside a message are always
-// 7-bit-encoded (top bit clear per the KMI encode/decode scheme), so a raw
-// 0xF0/0xF7 byte anywhere in the file can only be real framing - no risk of
-// mistaking encoded data for a boundary marker. A file produced the old way
-// (one giant KMI-formatted payload) simply comes back as a single chunk.
-std::vector<SysExChunk> findSysExChunks(const std::vector<unsigned char> &bytes)
-{
-    std::vector<SysExChunk> chunks;
-    std::size_t i = 0;
-    while (i < bytes.size())
-    {
-        if (bytes[i] != 0xF0)
-        {
-            ++i;
-            continue;
-        }
-        const std::size_t start = i;
-        std::size_t j = i + 1;
-        while (j < bytes.size() && bytes[j] != 0xF7)
-            ++j;
-        if (j >= bytes.size())
-            break; // trailing, unterminated F0 - not a complete message, ignore it
-
-        chunks.push_back(SysExChunk{start, j - start + 1});
-        i = j + 1;
-    }
-    return chunks;
-}
-
-// WinMM assigns a trailing disambiguation index to bare-alias port names
-// independently per port-direction list, so the same physical device can
-// enumerate as e.g. input "K-Board 4" / output "K-Board 5" - same device,
-// different OS-assigned suffix. Strip a trailing " <digits>" token so
-// input/output names for the same device compare equal.
-std::string stripTrailingIndex(const std::string &name)
-{
-    const std::string::size_type lastSpace = name.find_last_of(' ');
-    if (lastSpace == std::string::npos)
-        return name;
-
-    const std::string tail = name.substr(lastSpace + 1);
-    if (tail.empty())
-        return name;
-
-    for (std::string::const_iterator it = tail.begin(); it != tail.end(); ++it)
-        if (!std::isdigit(static_cast<unsigned char>(*it)))
-            return name;
-
-    return name.substr(0, lastSpace);
-}
-
-int findMatchingInputPort(RtMidiIn &midiIn, const std::string &outputPortName)
-{
-    const std::string outNorm = stripTrailingIndex(outputPortName);
-    const unsigned int n = midiIn.getPortCount();
-    for (unsigned int i = 0; i < n; ++i)
-    {
-        try
-        {
-            const std::string inName = midiIn.getPortName(i);
-            if (inName == outputPortName || stripTrailingIndex(inName) == outNorm)
-                return static_cast<int>(i);
-        }
-        catch (...)
-        {
-        }
-    }
-    return -1;
-}
-
-struct ReplyState
-{
-    volatile bool received;
-    ReplyState() : received(false) {}
-};
-
-void chunkReplyCallback(double /*timeStamp*/, std::vector<unsigned char> *message, void *userData)
-{
-    ReplyState *state = static_cast<ReplyState *>(userData);
-    if (message != 0 && !message->empty() && (*message)[0] == 0xF0)
-        state->received = true;
-}
-
-// Sends a Universal Non-Realtime Device Inquiry (F0 7E 7F 06 01 F7) and waits
-// up to waitMs for any SysEx reply (delivered via chunkReplyCallback).
-bool waitForIdReply(RtMidiOut &midiOut, ReplyState &state, unsigned int waitMs)
-{
-    static const std::vector<unsigned char> idRequest = {0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7};
-    state.received = false;
-    midiOut.sendMessage(&idRequest);
-
-    const unsigned int pollIntervalMs = 5;
-    unsigned int waited = 0;
-    while (!state.received && waited < waitMs)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
-        waited += pollIntervalMs;
-    }
-    return state.received;
-}
-
-// Sends every detected chunk in order. For files with more than one chunk, an
-// identity request is sent between chunks and must be answered within
-// chunkDelayMs before the next chunk is sent - the reliability strategy
-// sendsysex/docs/kmi_fw_update_process.md calls out ("optionally send SysEx
-// identity requests between chunks and wait for reply before continuing"),
-// which the K-Board bootloader supports: each chunk is independently framed
-// and CRC-validated, while the underlying hex-record parser state persists
-// across chunks (K-Board_Bootloader/code/MIDI/MIDI_sysex.c - static locals in
-// firmware_packet_process() survive across separate F0...F7 messages). A
-// single-chunk file (the historical one-giant-message format) just sends with
-// no handshake, same as before.
-//
-// chunkSize only matters when it's smaller than an individual chunk's length,
-// in which case that chunk is sub-split into chunkSize-byte windows sent
-// back-to-back (still the same message's bytes, delivered across multiple
-// host-side writes - fine, since order is preserved). When chunkSize is
-// already >= the chunk's length (the normal case for a properly chunked
-// file), each chunk goes out as a single, whole, correctly-framed message.
-bool sendChunkedFileToPort(RtMidiOut &midiOut,
-                           const std::string &outputPortName,
-                           const std::vector<unsigned char> &bytes,
-                           const std::vector<SysExChunk> &chunks,
-                           unsigned int chunkSize,
-                           unsigned int chunkDelayMs,
-                           unsigned int postDelayMs,
-                           std::string &errorMessage)
-{
-    if (chunks.empty())
-    {
-        errorMessage = "No complete SysEx message (0xF0...0xF7) found in file.";
-        return false;
-    }
-
-    if (chunks.size() > 1)
-    {
-        std::size_t minLen = chunks.front().length;
-        std::size_t maxLen = chunks.front().length;
-        for (std::size_t i = 1; i < chunks.size(); ++i)
-        {
-            minLen = std::min(minLen, chunks[i].length);
-            maxLen = std::max(maxLen, chunks[i].length);
-        }
-        std::cout << "Chunked SysEx file detected: " << chunks.size() << " chunk(s), "
-                  << minLen << "-" << maxLen << " bytes each (" << bytes.size()
-                  << " bytes total)\n";
-    }
-
-    // Only the multi-chunk case needs the identity-request handshake, so only
-    // it needs an input port opened.
-    RtMidiIn midiIn;
-    ReplyState replyState;
-    bool haveInput = false;
-    if (chunks.size() > 1)
-    {
-        midiIn.ignoreTypes(false, false, false);
-        const int inputPortNumber = findMatchingInputPort(midiIn, outputPortName);
-        if (inputPortNumber < 0)
-        {
-            errorMessage = "Could not find a MIDI input port matching \"" + outputPortName
-                          + "\" for the between-chunk identity handshake.";
-            return false;
-        }
-        midiIn.setCallback(chunkReplyCallback, &replyState);
-        midiIn.openPort(static_cast<unsigned int>(inputPortNumber));
-        haveInput = true;
-    }
-
-    bool ok = true;
-    for (std::size_t i = 0; i < chunks.size() && ok; ++i)
-    {
-        const SysExChunk &chunk = chunks[i];
-        std::cout << "Chunk " << (i + 1) << "/" << chunks.size()
-                  << " (" << chunk.length << " bytes)... ";
-        std::cout.flush();
-
-        try
-        {
-            if (chunkSize < chunk.length)
-            {
-                std::cout << "(sub-split into " << chunkSize << "-byte windows, -cs < chunk size) ";
-                std::size_t sent = 0;
-                while (sent < chunk.length)
-                {
-                    const std::size_t sizeToSend = std::min<std::size_t>(chunkSize, chunk.length - sent);
-                    std::vector<unsigned char> window(bytes.begin() + chunk.offset + sent,
-                                                       bytes.begin() + chunk.offset + sent + sizeToSend);
-                    midiOut.sendMessage(&window);
-                    sent += sizeToSend;
-                }
-            }
-            else
-            {
-                std::vector<unsigned char> whole(bytes.begin() + chunk.offset,
-                                                 bytes.begin() + chunk.offset + chunk.length);
-                midiOut.sendMessage(&whole);
-            }
-        }
-        catch (RtMidiError &error)
-        {
-            errorMessage = error.getMessage();
-            ok = false;
-            break;
-        }
-
-        const bool isLastChunk = (i + 1 == chunks.size());
-        if (!isLastChunk)
-        {
-            if (waitForIdReply(midiOut, replyState, chunkDelayMs))
-            {
-                std::cout << "sent, reply OK (" << (chunks.size() - i - 1) << " chunk(s) remaining)\n";
-            }
-            else
-            {
-                std::cout << "sent, NO REPLY within " << chunkDelayMs << " ms\n";
-                errorMessage = "No identity reply after chunk " + std::to_string(i + 1) + "/"
-                              + std::to_string(chunks.size()) + " - aborting transfer.";
-                ok = false;
-            }
-        }
-        else
-        {
-            std::cout << "sent (last chunk)\n";
-        }
-    }
-
-    if (haveInput)
-        midiIn.closePort();
-
-    if (ok)
-    {
-        std::cout << "Successfully sent all " << chunks.size() << " chunk(s) to MIDI OUT port: "
-                  << outputPortName << ", size: " << bytes.size() << " bytes.\n";
-        if (postDelayMs > 0U)
-            std::this_thread::sleep_for(std::chrono::milliseconds(postDelayMs));
-    }
-
-    return ok;
-}
+// stripTrailingIndex, findMatchingInputPort, ChunkReplyState,
+// chunkReplyCallback, waitForIdReply, and sendChunkedFileToPort now live in
+// chunkedSysExTransfer.h, shared with kmiDevice.cpp's automatic-update path
+// so both send chunked firmware through the identical, hardware-validated
+// protocol rather than two independently-drifting implementations.
 
 bool sendFileToPort(RtMidiOut &midiOut,
                     int portNumber,
@@ -624,6 +401,28 @@ CliOptions parseArguments(int argc, const char *argv[])
             options.versionText = arg.substr(std::string("--fw-version=").size());
             continue;
         }
+        if (arg == "--app-port")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --app-port.";
+                return options;
+            }
+            options.appPortName = argv[++i];
+            continue;
+        }
+        if (arg == "--bootloader-port")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --bootloader-port.";
+                return options;
+            }
+            options.bootloaderPortName = argv[++i];
+            continue;
+        }
         if (arg == "--send-bl-erase-reboot-cmd")
         {
             options.blEraseRebootCmd = true;
@@ -671,7 +470,16 @@ int runIdentityRequest(const CliOptions &options)
         return 1;
     }
 
+    if (!options.bootloaderPortName.empty() && options.appPortName.empty())
+    {
+        std::cout << "ERROR: --bootloader-port requires --app-port to also be set.\n";
+        return 1;
+    }
+
     kmiDevice device(options.familyName);
+
+    if (!options.appPortName.empty())
+        device.setPortNameOverride(options.appPortName, options.bootloaderPortName);
 
     std::cout << "Waiting for " << options.familyName << " to appear...\n";
 
@@ -718,7 +526,22 @@ int runAutomaticProcess(const CliOptions &options)
         return 1;
     }
 
+    if (!options.bootloaderPortName.empty() && options.appPortName.empty())
+    {
+        std::cout << "ERROR: --bootloader-port requires --app-port to also be set.\n";
+        return 1;
+    }
+
     kmiDevice device(options.familyName);
+
+    if (!options.appPortName.empty())
+    {
+        device.setPortNameOverride(options.appPortName, options.bootloaderPortName);
+        std::cout << "Port name override active: app=\"" << options.appPortName
+                  << "\" bootloader=\""
+                  << (options.bootloaderPortName.empty() ? options.appPortName : options.bootloaderPortName)
+                  << "\"\n";
+    }
 
     if (options.versionText.empty())
     {
