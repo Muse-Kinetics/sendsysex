@@ -21,6 +21,13 @@
       "bootloaderPidMsb": 1
     }
   },
+  "transport": {
+    "requiresFlushAfterPreamble": true,
+    "notes": [
+      "K-Board's SysEx preamble parser (MIDI_sysex.c: CORE_SX_PACKET_PREAMBLE, in both K-Board_Firmware and K-Board_Bootloader - same shared lineage) stops reading as soon as the fixed 6-byte preamble is decoded, without regard for the 7-bit/8-bit decode's 7-byte group boundaries. Without a flush after the preamble, the first payload byte of a sendSyxFormattedMessage()-based command can land in the same decode group as the tail of the preamble and get silently dropped when the firmware resets its decode buffer right after dispatching.",
+      "Confirmed on hardware: firmware_tester --flush-after-preamble (or --device kboard, which reads this field) is required for SYX_CMD_TEST_MODE/SYX_CMD_BURST_MODE payloads to land correctly; without it the command is silently no-op'd, not rejected. See k-board-firmware's .buddy-project/kboard-perf-test-design.md §10.3 for the full investigation."
+    ]
+  },
   "payloads": [
     {
       "id": "enter_bootloader",

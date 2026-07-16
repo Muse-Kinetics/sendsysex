@@ -69,6 +69,16 @@
         "notes": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "transport": {
+      "type": "object",
+      "properties": {
+        "requiresFlushAfterPreamble": {
+          "type": "boolean",
+          "description": "Set true when this family's SysEx preamble parser stops reading at a fixed byte count without regard for the 7-bit/8-bit decode's group boundaries (SX_ENCODE_LEN), so the first payload byte of a sendSyxFormattedMessage()-based command can land in the same decode group as the tail of the preamble and be silently dropped unless the sender flushes after the preamble (SysExMessageTX::setFlush(SYX_FLUSH_YES), or firmware_tester's --flush-after-preamble). Discovered on K-Board; also documented for EM Pro Riser in mk_firmware_tester/lib/midi_cpp's own source comments."
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "payloads": {
       "type": "array",
       "items": { "$ref": "#/$defs/payloadAsset" }
