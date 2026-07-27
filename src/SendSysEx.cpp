@@ -22,8 +22,14 @@
 namespace
 {
 const std::size_t MAX_MIDI_SYSEX_SIZE = 250000;
-const unsigned int DEFAULT_CHUNK_SIZE = 48;
-const unsigned int DEFAULT_CHUNK_DELAY_MS = 2;
+// 512 B / 100 ms: validated against real hardware on BopPad (a 49011 B
+// monolithic firmware image, sub-split and throttled via chunkedSysExTransfer.h)
+// and K-Board (a genuinely multi-chunk Hex_to_SysEx image) - see boppad.json's
+// firmware_3_0_3 payload notes and mimic_hub's kboard-perf-test-design.md.
+// Applies to both -f/-p/-n (raw send) and --fw-update (automatic update), which
+// share this same CliOptions default.
+const unsigned int DEFAULT_CHUNK_SIZE = 512;
+const unsigned int DEFAULT_CHUNK_DELAY_MS = 100;
 const unsigned int DEFAULT_POLL_SECONDS = 1;
 
 struct CliOptions
@@ -90,8 +96,8 @@ void printHelp()
         << "                              when omitted (the common case: same port name in both states).\n"
         << "                              Requires --app-port to also be set.\n"
         << "\nTransfer options:\n"
-        << "  -cs, --chunk-size <bytes>   SysEx chunk size in bytes (default: 48)\n"
-        << "  -cd, --chunk-delay <ms>     Delay between chunks in milliseconds (default: 2)\n"
+        << "  -cs, --chunk-size <bytes>   SysEx chunk size in bytes (default: 512)\n"
+        << "  -cd, --chunk-delay <ms>     Delay between chunks in milliseconds (default: 100)\n"
         << "  -pd, --post-delay <ms>      Wait N ms after last chunk before closing port (default: 500)\n"
         << "                              Prevents F7 loss when the receiver NAKs the final packet.\n"
         << "                              Use 0 to disable.\n"

@@ -3,13 +3,68 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "MIDI_device_metadata.hpp"
+
+// mm:ss for progress-bar elapsed/eta display.
+inline std::string formatDuration(double seconds)
+{
+    if (seconds < 0.0)
+        seconds = 0.0;
+
+    int totalSeconds = static_cast<int>(seconds + 0.5);
+    int minutes = totalSeconds / 60;
+    int secs = totalSeconds % 60;
+
+    std::ostringstream buffer;
+    buffer << std::setw(2) << std::setfill('0') << minutes
+           << ":" << std::setw(2) << std::setfill('0') << secs;
+    return buffer.str();
+}
+
+// \r-updating progress bar shared by every byte-streaming send path (raw -f,
+// and --fw-update's chunked/sub-split sends via chunkedSysExTransfer.h) so
+// they all look and behave the same. Prints a trailing newline once the
+// transfer completes (bytesSent >= totalBytes) so subsequent output starts
+// on a fresh line.
+inline void printProgress(std::size_t bytesSent,
+                          std::size_t totalBytes,
+                          std::size_t currentPacketSize,
+                          const std::chrono::steady_clock::time_point &startTime)
+{
+    const int barWidth = 30;
+    double progress = totalBytes > 0 ? static_cast<double>(bytesSent) / static_cast<double>(totalBytes) : 1.0;
+    if (progress > 1.0)
+        progress = 1.0;
+
+    int filled = static_cast<int>(progress * barWidth + 0.5);
+    if (filled > barWidth)
+        filled = barWidth;
+
+    const std::size_t bytesRemaining = totalBytes > bytesSent ? totalBytes - bytesSent : 0;
+    const double elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime).count() / 1000.0;
+    const double eta = (bytesSent > 0 && progress > 0.0) ? (elapsed / static_cast<double>(bytesSent)) * static_cast<double>(bytesRemaining) : 0.0;
+
+    std::cout << '\r'
+              << '[' << std::string(filled, '#') << std::string(barWidth - filled, '-') << "] "
+              << "pkt " << std::setw(4) << currentPacketSize << " B  "
+              << "sent " << std::setw(6) << bytesSent << '/' << std::setw(6) << totalBytes << " B  "
+              << "left " << std::setw(6) << bytesRemaining << " B  "
+              << "elapsed " << formatDuration(elapsed) << "  "
+              << "eta " << formatDuration(eta)
+              << std::flush;
+
+    if (bytesRemaining == 0)
+        std::cout << "\n";
+}
 
 inline std::string trimCopy(const std::string &text)
 {

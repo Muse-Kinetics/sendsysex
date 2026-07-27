@@ -19,52 +19,10 @@
 namespace
 {
 const std::size_t MAX_MIDI_SYSEX_SIZE = 250000;
-
-std::string formatDuration(double seconds)
-{
-    if (seconds < 0.0)
-        seconds = 0.0;
-
-    int totalSeconds = static_cast<int>(seconds + 0.5);
-    int minutes = totalSeconds / 60;
-    int secs = totalSeconds % 60;
-
-    std::ostringstream buffer;
-    buffer << std::setw(2) << std::setfill('0') << minutes
-           << ":" << std::setw(2) << std::setfill('0') << secs;
-    return buffer.str();
-}
-
-void printProgress(std::size_t bytesSent,
-                   std::size_t totalBytes,
-                   std::size_t currentPacketSize,
-                   const std::chrono::steady_clock::time_point &startTime)
-{
-    const int barWidth = 30;
-    double progress = totalBytes > 0 ? static_cast<double>(bytesSent) / static_cast<double>(totalBytes) : 1.0;
-    if (progress > 1.0)
-        progress = 1.0;
-
-    int filled = static_cast<int>(progress * barWidth + 0.5);
-    if (filled > barWidth)
-        filled = barWidth;
-
-    const std::size_t bytesRemaining = totalBytes > bytesSent ? totalBytes - bytesSent : 0;
-    const double elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime).count() / 1000.0;
-    const double eta = (bytesSent > 0 && progress > 0.0) ? (elapsed / static_cast<double>(bytesSent)) * static_cast<double>(bytesRemaining) : 0.0;
-
-    std::cout << '\r'
-              << '[' << std::string(filled, '#') << std::string(barWidth - filled, '-') << "] "
-              << "pkt " << std::setw(4) << currentPacketSize << " B  "
-              << "sent " << std::setw(6) << bytesSent << '/' << std::setw(6) << totalBytes << " B  "
-              << "left " << std::setw(6) << bytesRemaining << " B  "
-              << "elapsed " << formatDuration(elapsed) << "  "
-              << "eta " << formatDuration(eta)
-              << std::flush;
-
-    if (bytesRemaining == 0)
-        std::cout << "\n";
-}
+// formatDuration/printProgress moved to deviceHelpers.h (shared with
+// chunkedSysExTransfer.h's sendChunkedFileToPort(), used by both -f and
+// --fw-update) so there's one progress-bar implementation, not two drifting
+// copies.
 }
 
 kmiDevice::kmiDevice(const std::string &familyId)

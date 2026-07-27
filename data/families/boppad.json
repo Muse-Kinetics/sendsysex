@@ -21,6 +21,27 @@
       "bootloaderPidMsb": 1
     }
   },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/BopPad/BopPad_loadBootloader.syx",
+      "notes": ["Requests a reboot into bootloader mode while the device still reports as BopPad."]
+    },
+    {
+      "id": "firmware_3_0_3",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "3.0.3",
+      "path": "syx/BopPad/BopPad-v3.0.3.syx",
+      "default": true,
+      "latest": true,
+      "notes": [
+        "Single monolithic SysEx message (49011 bytes, one F0...F7 pair), not Hex_to_SysEx-chunked like K-Board's format."
+      ]
+    }
+  ],
   "profiles": [
     {
       "id": "application",
@@ -35,6 +56,23 @@
           { "index": 1, "role": "main" }
         ]
       }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "productStrings": ["BopPad Bootloader"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      },
+      "notes": [
+        "Confirmed on hardware 2026-07-27: BopPad's bootloader re-enumerates under its own distinct product string \"BopPad Bootloader\", unlike K-Board (whose bootloader keeps reporting the same product string as its application, disambiguated only by PID MSB). Without this profile, --fw-update sends the bootloader-entry payload successfully but then polls forever, unable to match the resulting port."
+      ]
     }
   ]
 }

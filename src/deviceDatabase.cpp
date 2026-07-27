@@ -162,6 +162,19 @@ bool deviceDatabase::loadFamily(const std::string &familyId)
             if (!portLayout.contains(dir))
                 continue;
 
+            // A direction with exactly one port entry (single_port/unnamed_single_port
+            // style, or a bootloader profile that only ever exposes one port even under
+            // an otherwise multi-port "ordered" style) has no numbering ambiguity to
+            // resolve: the real CoreMIDI port name for a single-port device is just the
+            // bare product string, with no "Port 1" suffix (that suffix is a macOS/driver
+            // convention for disambiguating the 2nd+ ports of a genuinely multi-port
+            // composite device - see e.g. QuNexus's control_surface/expander/cv ports).
+            // Appending it unconditionally previously made single-port families
+            // unmatchable via family-marker port matching (confirmed on real hardware
+            // with BopPad's "single_port" profile; K-Board's identically-shaped profile
+            // has the same latent bug, just never exercised without --app-port).
+            const bool singlePortDirection = (portLayout.at(dir).size() == 1);
+
             for (const auto &portEntry : portLayout.at(dir))
             {
                 const int         portIndex = portEntry.value("index", -1);
@@ -183,7 +196,7 @@ bool deviceDatabase::loadFamily(const std::string &familyId)
                     {
                         canonical = toLowerCopy(collapseWhitespaceCopy(trimCopy(productStr + " " + portName)));
                     }
-                    else if (portIndex >= 1)
+                    else if (portIndex >= 1 && !singlePortDirection)
                     {
                         std::ostringstream oss;
                         oss << productLower << " port " << portIndex;

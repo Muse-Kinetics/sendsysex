@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "RtMidi.h"
+#include "deviceHelpers.h"
 #include "sysExChunking.h"
 
 // WinMM assigns a trailing disambiguation index to bare-alias port names
@@ -204,19 +205,24 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
         haveInput = true;
     }
 
+    std::size_t totalBytes = 0;
+    for (std::size_t i = 0; i < chunks.size(); ++i)
+        totalBytes += chunks[i].length;
+    std::size_t bytesSentOverall = 0;
+    const std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+
     bool ok = true;
     for (std::size_t i = 0; i < chunks.size() && ok; ++i)
     {
         const SysExChunk &chunk = chunks[i];
         std::cout << "Chunk " << (i + 1) << "/" << chunks.size()
-                  << " (" << chunk.length << " bytes)... ";
-        std::cout.flush();
+                  << " (" << chunk.length << " bytes)\n";
 
         try
         {
             if (chunkSize < chunk.length)
             {
-                std::cout << "(sub-split into " << chunkSize << "-byte windows, chunk size < message length) ";
+                std::cout << "  sub-split into " << chunkSize << "-byte windows (chunk size < message length)\n";
                 std::size_t sent = 0;
                 while (sent < chunk.length)
                 {
@@ -225,6 +231,15 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                                                        bytes.begin() + chunk.offset + sent + sizeToSend);
                     midiOut.sendMessage(&window);
                     sent += sizeToSend;
+                    bytesSentOverall += sizeToSend;
+                    printProgress(bytesSentOverall, totalBytes, sizeToSend, startTime);
+
+                    // Same throttling contract as sendFileToOpenPort()'s raw byte-slice
+                    // path: sleep chunkDelayMs between windows (not after the final one)
+                    // so a monolithic message sub-split via -cs doesn't hit the receiver
+                    // as an unthrottled back-to-back burst.
+                    if (sent < chunk.length && chunkDelayMs > 0)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(chunkDelayMs));
                 }
             }
             else
@@ -232,14 +247,25 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                 std::vector<unsigned char> whole(bytes.begin() + chunk.offset,
                                                  bytes.begin() + chunk.offset + chunk.length);
                 midiOut.sendMessage(&whole);
+                bytesSentOverall += chunk.length;
+                printProgress(bytesSentOverall, totalBytes, chunk.length, startTime);
             }
         }
         catch (RtMidiError &error)
         {
+            if (bytesSentOverall < totalBytes)
+                std::cout << "\n";
             errorMessage = error.getMessage();
             ok = false;
             break;
         }
+
+        // printProgress only prints its own trailing newline once the whole file
+        // is done (bytesSentOverall >= totalBytes) - end this chunk's bar line
+        // explicitly so per-chunk handshake status below always starts clean,
+        // including on every chunk before the last.
+        if (bytesSentOverall < totalBytes)
+            std::cout << "\n";
 
         const bool isLastChunk = (i + 1 == chunks.size());
         if (!isLastChunk)
@@ -252,19 +278,15 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
 
             if (waitForIdReply(midiOut, replyState, chunkDelayMs))
             {
-                std::cout << "sent, reply OK (" << (chunks.size() - i - 1) << " chunk(s) remaining)\n";
+                std::cout << "  reply OK (" << (chunks.size() - i - 1) << " chunk(s) remaining)\n";
             }
             else
             {
-                std::cout << "sent, NO REPLY within " << chunkDelayMs << " ms\n";
+                std::cout << "  NO REPLY within " << chunkDelayMs << " ms\n";
                 errorMessage = "No identity reply after chunk " + std::to_string(i + 1) + "/"
                               + std::to_string(chunks.size()) + " - aborting transfer.";
                 ok = false;
             }
-        }
-        else
-        {
-            std::cout << "sent (last chunk)\n";
         }
     }
 
