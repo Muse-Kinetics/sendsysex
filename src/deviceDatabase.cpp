@@ -590,6 +590,14 @@ std::string deviceDatabase::normalizePortName(const std::string &rawPortName) co
             return normalizeWinMM(rawPortName);
         case RtMidi::WINDOWS_UWP:
             return normalizeWinUWP(rawPortName);
+        case RtMidi::WINDOWS_MIDI_SERVICES:
+            // WMS reports each port's actual Group Terminal Block descriptor
+            // name (e.g. "SoftStep Control Surface", "SoftStep Expander") -
+            // "ProductName PortName", no numeric OS-assigned suffix - the
+            // same shape CoreMIDI uses on macOS, and unlike WinMM's
+            // positional scheme ("SoftStep" for port 1, "MIDIIN2 (SoftStep)"
+            // for port 2+). normalizeWinMM() cannot parse this shape.
+            return normalizeCoreAudioMIDI(rawPortName);
         case RtMidi::MACOSX_CORE:
             return normalizeCoreAudioMIDI(rawPortName);
         case RtMidi::LINUX_ALSA:

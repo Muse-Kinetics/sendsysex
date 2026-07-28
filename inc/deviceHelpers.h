@@ -12,6 +12,23 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <climits>
+#include <mach-o/dyld.h>
+#include <stdlib.h>
+#elif defined(__linux__)
+#include <climits>
+#include <unistd.h>
+#endif
+
 #include "MIDI_device_metadata.hpp"
 
 // mm:ss for progress-bar elapsed/eta display.
@@ -228,16 +245,75 @@ inline bool readBinaryFile(const std::string &filePath, std::vector<unsigned cha
     return true;
 }
 
+// Directory containing the running executable, queried from the OS rather
+// than derived from argv[0] (which Windows leaves as whatever the caller
+// typed - e.g. just "SendSysEx.exe" when found via PATH - and is therefore
+// not reliably usable to locate files shipped alongside the binary).
+// Returns an empty string if the platform API isn't available/fails.
+inline std::string executableDirectory()
+{
+    std::string exePath;
+
+#if defined(_WIN32)
+    char buffer[MAX_PATH] = {0};
+    const DWORD length = GetModuleFileNameA(0, buffer, MAX_PATH);
+    if (length > 0 && length < MAX_PATH)
+        exePath.assign(buffer, length);
+#elif defined(__APPLE__)
+    char buffer[PATH_MAX] = {0};
+    uint32_t size = sizeof(buffer);
+    if (_NSGetExecutablePath(buffer, &size) == 0)
+    {
+        char resolved[PATH_MAX] = {0};
+        if (realpath(buffer, resolved) != 0)
+            exePath = resolved;
+        else
+            exePath = buffer;
+    }
+#elif defined(__linux__)
+    char buffer[PATH_MAX] = {0};
+    const ssize_t length = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (length > 0)
+        exePath.assign(buffer, static_cast<std::size_t>(length));
+#endif
+
+    if (exePath.empty())
+        return std::string();
+
+    const std::string::size_type lastSlash = exePath.find_last_of("/\\");
+    if (lastSlash == std::string::npos)
+        return std::string();
+
+    return exePath.substr(0, lastSlash);
+}
+
+// Resolves a path such as "data/families/boppad.json" that ships inside the
+// sendsysex repo. Tried relative to the running executable first - so this
+// works no matter what the caller's current working directory is (e.g. run
+// as shared/sendsysex/build/Release/SendSysEx.exe from a parent repo root) -
+// covering both the multi-config layout (build/<Config>/SendSysEx.exe, two
+// levels above the repo root) and single-config (build/SendSysEx.exe, one
+// level above). Falls back to CWD-relative lookups for the case where the
+// caller has already cd'd into (or near) the repo root.
 inline std::string resolveDataPath(const std::string &relativePath)
 {
-    const std::string candidates[] = {
-        relativePath,
-        std::string("./") + relativePath,
-        std::string("../") + relativePath,
-        std::string("../../") + relativePath
-    };
-    const std::size_t count = sizeof(candidates) / sizeof(candidates[0]);
-    for (std::size_t i = 0; i < count; ++i)
+    std::vector<std::string> candidates;
+
+    const std::string exeDir = executableDirectory();
+    if (!exeDir.empty())
+    {
+        candidates.push_back(exeDir + "/" + relativePath);
+        candidates.push_back(exeDir + "/../" + relativePath);
+        candidates.push_back(exeDir + "/../../" + relativePath);
+        candidates.push_back(exeDir + "/../../../" + relativePath);
+    }
+
+    candidates.push_back(relativePath);
+    candidates.push_back(std::string("./") + relativePath);
+    candidates.push_back(std::string("../") + relativePath);
+    candidates.push_back(std::string("../../") + relativePath);
+
+    for (std::size_t i = 0; i < candidates.size(); ++i)
     {
         std::ifstream probe(candidates[i].c_str(), std::ios::in | std::ios::binary);
         if (probe.good())

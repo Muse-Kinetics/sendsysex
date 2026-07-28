@@ -16,8 +16,10 @@
 #include "RtMidi.h"
 #include "deviceHelpers.h"
 #include "kmiDevice.h"
+#include "midiBackend.h"
 #include "sysExChunking.h"
 #include "chunkedSysExTransfer.h"
+#include "version.h"
 
 namespace
 {
@@ -54,13 +56,14 @@ struct CliOptions
     int blPid = -1;
     std::string appPortName;
     std::string bootloaderPortName;
+    std::string midiBackendOverride;
 };
 
 
 void printHelp()
 {
     std::cout
-        << "\nSend SysEx Utility"
+        << "\nSend SysEx Utility v" SENDSYSEX_VERSION
         << "\n(c) 2026 KMI Music, Inc."
         << "\nAuthor: Eric Bateman (eric@musekinetics.com)\n"
         << "\nModes:\n"
@@ -101,6 +104,11 @@ void printHelp()
         << "  -pd, --post-delay <ms>      Wait N ms after last chunk before closing port (default: 500)\n"
         << "                              Prevents F7 loss when the receiver NAKs the final packet.\n"
         << "                              Use 0 to disable.\n"
+        << "\nGlobal options:\n"
+        << "  --midi-backend <winmm|wms>  Windows only. Force a specific RtMidi backend instead of\n"
+        << "                              auto-detecting. 'wms' fails immediately if the Windows MIDI\n"
+        << "                              Services SDK runtime isn't installed/running, rather than\n"
+        << "                              silently falling back to WinMM the way auto-detect does.\n"
         << "  -h, --help                  Show this help message\n"
         << "\nNotes:\n"
         << "  - Raw send mode uses RtMidi directly and does not normalize port names for you.\n"
@@ -121,6 +129,7 @@ void printHelp()
         << "  SendSysEx --fw-update SoftStep --fw-version 2.0.4\n"
         << "  SendSysEx --fw-update kboard --fw-version 9.0.1 --app-port \"Mimic Hub MIDI Port 5\"\n"
         << "  SendSysEx --id-request QuNexus\n"
+        << "  SendSysEx --fw-update BopPad --midi-backend winmm\n"
         << "  SendSysEx --send-bl-erase-reboot-cmd --pid <pid>\n\n"
         << "Bootloader commands:\n"
         << "  --send-bl-erase-reboot-cmd  Send a double-EOF erase+reboot command to a KMI bootloader.\n"
@@ -130,7 +139,7 @@ void printHelp()
 
 void listPorts(RtMidiOut &midiOut)
 {
-    RtMidiIn midiIn;
+    RtMidiIn midiIn(midiBackend::selectedApi());
     const unsigned int numInPorts = midiIn.getPortCount();
     for (unsigned int i = 0; i < numInPorts; ++i)
         std::cout << "MIDI Input  Port " << i << ": " << midiIn.getPortName(i) << "\n";
@@ -459,6 +468,17 @@ CliOptions parseArguments(int argc, const char *argv[])
             options.blPid = static_cast<int>(parsed);
             continue;
         }
+        if (arg == "--midi-backend")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --midi-backend.";
+                return options;
+            }
+            options.midiBackendOverride = argv[++i];
+            continue;
+        }
 
         options.showHelp = true;
         options.parseError = "Unrecognized argument: " + arg;
@@ -615,7 +635,7 @@ int runBlEraseRebootCmd(const CliOptions &options)
 
     try
     {
-        RtMidiOut midiOut;
+        RtMidiOut midiOut(midiBackend::selectedApi());
         int portNumber = -1;
         if (options.usePortNumber)
         {
@@ -656,7 +676,7 @@ int runManualProcess(const CliOptions &options)
 {
     try
     {
-        RtMidiOut midiOut;
+        RtMidiOut midiOut(midiBackend::selectedApi());
 
         if (options.listNormalizedOnly)
         {
@@ -720,6 +740,8 @@ int runManualProcess(const CliOptions &options)
 
 int main(int argc, const char *argv[])
 {
+    std::cout << "SendSysEx v" SENDSYSEX_VERSION "\n";
+
     const CliOptions options = parseArguments(argc, argv);
 
     if (!options.parseError.empty())
@@ -738,6 +760,15 @@ int main(int argc, const char *argv[])
         printHelp();
         return 0;
     }
+
+    std::string midiBackendError;
+    if (!midiBackend::initialize(options.midiBackendOverride, midiBackendError))
+    {
+        std::cout << "ERROR: " << midiBackendError << "\n";
+        return 1;
+    }
+
+    std::cout << "MIDI backend: " << midiBackend::describeSelectedApi() << "\n";
 
     std::cout << "Chunk size: " << options.chunkSize << " bytes, delay: " << options.chunkDelayMs
               << " ms, post-delay: " << options.postDelayMs << " ms\n";

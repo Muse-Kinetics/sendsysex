@@ -4,6 +4,7 @@
 #include "mfgLookup.h"
 #include "MIDI_bytestream_parser.hpp"
 #include "MIDI_sysex.hpp"
+#include "midiBackend.h"
 #include "RtMidi.h"
 #include "sysExChunking.h"
 #include "chunkedSysExTransfer.h"
@@ -112,7 +113,7 @@ bool kmiDevice::refreshPorts()
     // Tell the database which backend is active so it can apply the correct
     // port-name normalization strategy.
     {
-        RtMidiOut tempApiProbe;
+        RtMidiOut tempApiProbe(midiBackend::selectedApi());
         database_.setActiveApi(tempApiProbe.getCurrentApi());
     }
 
@@ -624,13 +625,13 @@ bool kmiDevice::scanPorts(std::vector<std::string> &inputPorts,
 {
     try
     {
-        RtMidiIn tempIn;
+        RtMidiIn tempIn(midiBackend::selectedApi());
         tempIn.ignoreTypes(false, false, false);
         const unsigned int numInPorts = tempIn.getPortCount();
         for (unsigned int i = 0; i < numInPorts; ++i)
             inputPorts.push_back(tempIn.getPortName(i));
 
-        RtMidiOut tempOut;
+        RtMidiOut tempOut(midiBackend::selectedApi());
         const unsigned int numOutPorts = tempOut.getPortCount();
         for (unsigned int i = 0; i < numOutPorts; ++i)
             outputPorts.push_back(tempOut.getPortName(i));
@@ -788,7 +789,7 @@ bool kmiDevice::openInputByName(const std::string &portName)
 {
     try
     {
-        midiIn_ = new RtMidiIn();
+        midiIn_ = new RtMidiIn(midiBackend::selectedApi());
         midiIn_->ignoreTypes(false, false, false);
         const unsigned int numPorts = midiIn_->getPortCount();
         // Override mode: match the literal reported name exactly.
@@ -838,7 +839,7 @@ bool kmiDevice::openOutputByName(const std::string &portName)
 {
     try
     {
-        midiOut_ = new RtMidiOut();
+        midiOut_ = new RtMidiOut(midiBackend::selectedApi());
         const unsigned int numPorts = midiOut_->getPortCount();
         const std::string normalizedRequest = portNameOverrideActive_ ? std::string() : database_.normalizePortName(portName);
 
@@ -880,7 +881,7 @@ bool kmiDevice::openTransferOutputByName(const std::string &portName)
 
     try
     {
-        transferOut_ = new RtMidiOut();
+        transferOut_ = new RtMidiOut(midiBackend::selectedApi());
         const unsigned int numPorts = transferOut_->getPortCount();
         const std::string normalizedRequest = portNameOverrideActive_ ? std::string() : database_.normalizePortName(portName);
 

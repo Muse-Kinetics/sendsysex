@@ -45,5 +45,3 @@ cmake-build-release/
 
 ### Logs ###
 *.log
-
-build-uwp/

@@ -125,10 +125,18 @@
       "targetState": "bootloader",
       "version": "2.0.5",
       "path": "syx/SoftStep/Softstep_Firmware_v2.0.5.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"]
+    },
+    {
+      "id": "firmware_2_0_6",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.0.6",
+      "path": "syx/SoftStep/Softstep_Firmware_v2.0.6-cs512.syx",
       "hardware": ["softstep1", "softstep2", "softstep3"],
       "default": true,
       "latest": true,
-      "notes": ["Preferred current SoftStep firmware image."]
+      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging, per decisions.md."]
     },
     {
       "id": "reset_presets_2_0_5",

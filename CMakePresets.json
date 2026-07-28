@@ -10,30 +10,13 @@
     {
       "name": "windows-msvc",
       "displayName": "Windows MSVC x64",
-      "description": "Build with Visual Studio 2022 or Build Tools",
+      "description": "Build with Visual Studio 2022 or Build Tools. Both WinMM and Windows MIDI Services (WMS) are compiled in; the backend is selected at runtime. Requires the Windows MIDI Services SDK (see README).",
       "generator": "Visual Studio 17 2022",
       "architecture": {
         "value": "x64",
         "strategy": "external"
       },
-      "binaryDir": "${sourceDir}/build",
-      "cacheVariables": {
-        "RTMIDI_WINDOWS_API": "winmm"
-      }
-    },
-    {
-      "name": "windows-uwp",
-      "displayName": "Windows UWP x64",
-      "description": "Build with the RtMidi UWP backend",
-      "generator": "Visual Studio 17 2022",
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
-      "binaryDir": "${sourceDir}/build-uwp",
-      "cacheVariables": {
-        "RTMIDI_WINDOWS_API": "uwp"
-      }
+      "binaryDir": "${sourceDir}/build"
     }
   ],
   "buildPresets": [
@@ -49,11 +32,6 @@
     {
       "name": "windows-release",
       "configurePreset": "windows-msvc",
-      "configuration": "Release"
-    },
-    {
-      "name": "windows-uwp-release",
-      "configurePreset": "windows-uwp",
       "configuration": "Release"
     }
   ]
