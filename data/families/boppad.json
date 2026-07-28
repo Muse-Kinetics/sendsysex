@@ -35,10 +35,20 @@
       "targetState": "bootloader",
       "version": "3.0.3",
       "path": "syx/BopPad/BopPad-v3.0.3.syx",
+      "notes": [
+        "Single monolithic SysEx message (49011 bytes, one F0...F7 pair), not Hex_to_SysEx-chunked like K-Board's format."
+      ]
+    },
+    {
+      "id": "firmware_3_0_4",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "3.0.4",
+      "path": "syx/BopPad/BopPad Firmware v3.0.4_cs128.syx",
       "default": true,
       "latest": true,
       "notes": [
-        "Single monolithic SysEx message (49011 bytes, one F0...F7 pair), not Hex_to_SysEx-chunked like K-Board's format."
+        "Chunk-safe (-cs128) packaging, unlike 3.0.3's single monolithic message."
       ]
     }
   ],
