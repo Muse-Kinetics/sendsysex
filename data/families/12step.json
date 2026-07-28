@@ -46,9 +46,21 @@
       "version": "1.0.7",
       "path": "syx/12Step/12Step_Firmware_v1.0.7.syx",
       "hardware": ["12step1", "12step2"],
+      "notes": ["Single unchunked payload, superseded by firmware_1_0_8's chunk-safe packaging."]
+    },
+    {
+      "id": "firmware_1_0_8",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.8",
+      "path": "syx/12Step/12 Step Firmware v1.0.8_cs512.syx",
+      "hardware": ["12step1", "12step2"],
       "default": true,
       "latest": true,
-      "notes": ["Preferred current 12 Step firmware payload."]
+      "notes": [
+        "Chunk-safe (-cs512) packaging via the shared Hex_to_SysEx tool, built from 12-step-firmware's SysEx_and_Hex_Images/make_sysex_app.ps1.",
+        "Addressed with product ID 21 (0x15, the bootloader's own PID) rather than either application hardware revision's PID (20/22), so it works unmodified for both 12step1 and 12step2."
+      ]
     }
   ],
   "profiles": [
