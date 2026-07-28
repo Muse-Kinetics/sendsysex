@@ -327,20 +327,13 @@ bool deviceDatabase::getPayloadPath(const std::string &payloadType, const versio
         if (pathValue.empty())
             continue;
 
-        if (version != 0)
-        {
-            if (payload.value("version", std::string()) == requestedVersion)
-            {
-                // Payload paths in the JSON are relative to the sendsysex repo
-                // root, same as the family JSON itself - resolve them the same
-                // way rather than handing back a path that only works when the
-                // caller's CWD happens to already be the repo root.
-                const std::string resolved = resolveDataPath(pathValue);
-                path = resolved.empty() ? pathValue : resolved;
-                return true;
-            }
+        // When a specific version is requested, only payloads matching that
+        // version are eligible - but multiple payloads can share the same
+        // version (e.g. a legacy monolithic .syx and a newer chunked
+        // repackaging of the identical firmware release), so still prefer
+        // latest/default among them rather than just the first array match.
+        if (version != 0 && payload.value("version", std::string()) != requestedVersion)
             continue;
-        }
 
         if (firstMatch.empty())
             firstMatch = pathValue;
@@ -350,6 +343,10 @@ bool deviceDatabase::getPayloadPath(const std::string &payloadType, const versio
             defaultMatch = pathValue;
     }
 
+    // Payload paths in the JSON are relative to the sendsysex repo root, same
+    // as the family JSON itself - resolve them the same way rather than
+    // handing back a path that only works when the caller's CWD happens to
+    // already be the repo root.
     if (!latestMatch.empty())  { const std::string r = resolveDataPath(latestMatch);  path = r.empty() ? latestMatch  : r; return true; }
     if (!defaultMatch.empty()) { const std::string r = resolveDataPath(defaultMatch); path = r.empty() ? defaultMatch : r; return true; }
     if (!firstMatch.empty())   { const std::string r = resolveDataPath(firstMatch);   path = r.empty() ? firstMatch   : r; return true; }

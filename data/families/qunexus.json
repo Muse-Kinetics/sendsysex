@@ -14,12 +14,15 @@
   },
   "identity": {
     "manufacturerId": [0, 1, 95],
-    "applicationPidLsb": [25],
+    "applicationPidLsb": [24],
     "bootloaderPidLsb": [25],
     "stateDetection": {
       "applicationPidMsb": 0,
       "bootloaderPidMsb": 1
-    }
+    },
+    "notes": [
+      "Application PID was 25 prior to named-port support; current firmware (QuNexus_Firmware/code/USB/USB_Descriptor.h) reports 24. Corrected 2026-07-28 - this file previously still listed 25."
+    ]
   },
   "payloads": [
     {
@@ -35,9 +38,21 @@
       "targetState": "bootloader",
       "version": "2.2.0",
       "path": "syx/QuNexus/QuNexus_Firmware_v2.2.0.syx",
+      "notes": [
+        "Single monolithic SysEx message, not Hex_to_SysEx-chunked. Superseded by firmware_2_2_0_cs512 - kept until the chunked payload is hardware-validated."
+      ]
+    },
+    {
+      "id": "firmware_2_2_0_cs512",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.2.0",
+      "path": "syx/QuNexus/QuNexus Firmware v2.2.0_cs512.syx",
       "default": true,
       "latest": true,
-      "notes": ["Preferred current QuNexus firmware payload."]
+      "notes": [
+        "Chunk-safe (-cs512) packaging via QuNexus's SysEx_and_Hex_Images/make_sysex_app.ps1."
+      ]
     }
   ],
   "profiles": [
