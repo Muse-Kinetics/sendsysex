@@ -36,6 +36,11 @@
 .PARAMETER CMakeExe
     Path to cmake.exe to use. Default: cmake (whatever is on PATH).
 
+.PARAMETER Generator
+    CMake generator to configure with. Default: "Visual Studio 17 2022".
+    Override on machines without VS2022 installed, e.g. -Generator
+    "Visual Studio 16 2019".
+
 .EXAMPLE
     .\package-release.ps1
     Build + stage + zip an unsigned package.
@@ -48,7 +53,8 @@ param(
     [string]$Configuration = "Release",
     [string]$OutputDir = "dist",
     [switch]$SkipBuild,
-    [string]$CMakeExe = "cmake"
+    [string]$CMakeExe = "cmake",
+    [string]$Generator = "Visual Studio 17 2022"
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,8 +65,8 @@ Set-Location $repoRoot
 $buildDir = Join-Path $repoRoot "build"
 
 if (-not $SkipBuild) {
-    Write-Host "==> Configuring ($Configuration)..." -ForegroundColor Cyan
-    & $CMakeExe -G "Visual Studio 17 2022" -A x64 -B $buildDir
+    Write-Host "==> Configuring ($Configuration, $Generator)..." -ForegroundColor Cyan
+    & $CMakeExe -G $Generator -A x64 -B $buildDir
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed." }
 
     Write-Host "==> Building ($Configuration)..." -ForegroundColor Cyan
