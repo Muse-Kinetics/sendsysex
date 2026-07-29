@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 
 project(SendSysEx
-    VERSION 0.9.0
+    VERSION 0.10.0
     DESCRIPTION "Command-line MIDI SysEx sender"
     LANGUAGES CXX
 )

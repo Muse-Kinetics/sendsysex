@@ -5,8 +5,8 @@ Command-line utility to send MIDI SysEx messages, with support for two-step boot
 Eric Bateman  
 eric@musekinetics.com
 
-Version 0.9.0  
-Last updated: 2026-07-27
+Version 0.10.0  
+Last updated: 2026-07-29
 
 Licensed under the [MIT License](LICENSE).
 
