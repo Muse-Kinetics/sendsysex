@@ -35,9 +35,20 @@
       "targetState": "bootloader",
       "version": "1.2.31",
       "path": "syx/QuNeo/Quneo_Firmware_v1.2.31.syx",
+      "notes": ["Single unchunked payload, superseded by firmware_1_2_31_chunked's chunk-safe packaging."]
+    },
+    {
+      "id": "firmware_1_2_31_chunked",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.2.31",
+      "path": "syx/QuNeo/QuNeo Firmware v1.2.31_cs128.syx",
       "default": true,
       "latest": true,
-      "notes": ["Preferred current QuNeo firmware payload."]
+      "notes": [
+        "Chunk-safe (-cs128) packaging via the shared Hex_to_SysEx tool, built from quneo-firmware's SysEx_and_Hex_Images/make_sysex_app.ps1.",
+        "Not yet confirmed on hardware - no QuNeo unit was connected when this payload was generated and packaging-validated (2026-07-28)."
+      ]
     }
   ],
   "profiles": [
