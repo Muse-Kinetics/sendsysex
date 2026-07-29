@@ -1,0 +1,93 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "malletstation",
+  "name": "MalletStation",
+  "summary": "Single-port family. Application reports SysEx product ID LSB 39 (0x27); bootloader re-enumerates under its own distinct product string \"malletStation Bootloader\".",
+  "discovery": {
+    "familyMarkers": ["malletStation"],
+    "safeProbeRoles": {
+      "application": ["main"],
+      "bootloader": ["bootloader", "main"]
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [39],
+    "bootloaderPidLsb": [],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    },
+    "notes": [
+      "applicationPidMsb confirmed from EM1_uv5/USB/USB_Descriptor.h (PID 0x27, PID_MSB 0x00). bootloaderPidMsb is NOT yet hardware-confirmed - the bootloader's own source isn't present in the marimba_firmware repo (it's a vendored prebuilt binary), so this follows the same 0/1 convention used by other KMI families pending verification against a real device or the bootloader's own source."
+    ]
+  },
+  "payloads": [
+    {
+      "id": "enter_bootloader",
+      "type": "bootloader_entry",
+      "targetState": "application",
+      "path": "syx/MalletStation EM1/malletStationRebootToBootloader.syx",
+      "notes": ["Requests a reboot into bootloader mode while the device still reports as malletStation."]
+    },
+    {
+      "id": "firmware_1_1_1_legacy",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.1.1",
+      "path": "syx/MalletStation EM1/malletStation_v1.1.1.syx",
+      "default": false,
+      "latest": false,
+      "notes": [
+        "Single monolithic SysEx message (85531 bytes, one F0...F7 pair), not Hex_to_SysEx-chunked. Predates this family's registration in sendsysex; kept for reference/compatibility."
+      ]
+    },
+    {
+      "id": "firmware_1_1_1_cs512",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.1.1",
+      "path": "syx/MalletStation EM1/MalletStation Firmware v1.1.1_cs512.syx",
+      "default": true,
+      "latest": true,
+      "notes": [
+        "Chunk-safe (-cs512) packaging via Hex_to_SysEx, paired with bootloader v1.0.3. Built and version-matched to EM1_uv5/Main/version.h 2026-07-29; not yet hardware-validated (see marimba_firmware's .buddy-project/blockers.md)."
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["malletStation"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "main" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main" }
+        ]
+      }
+    },
+    {
+      "id": "bootloader",
+      "state": "bootloader",
+      "productStrings": ["malletStation Bootloader"],
+      "portLayout": {
+        "style": "single_port",
+        "inputs": [
+          { "index": 1, "role": "bootloader" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "bootloader" }
+        ]
+      },
+      "notes": [
+        "Distinct product string from the application (unlike K-Board, whose bootloader keeps the app's product string and is disambiguated only by PID MSB) - see identity.notes for MSB caveat."
+      ]
+    }
+  ]
+}
