@@ -136,7 +136,10 @@
       "hardware": ["softstep1", "softstep2", "softstep3"],
       "default": true,
       "latest": true,
-      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging, per decisions.md."]
+      "notes": [
+        "Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging, per decisions.md.",
+        "Updated 2026-07-31 with a 1-second boot-time tare capture for key sensors (margined +25%, clamped) to reduce stuck-key false triggers, and an enforced off_sense >= on_sense/2 floor for all keys and the nav pad. Confirmed on real hardware to fix an occasional sticking-key issue. Firmware version number unchanged (still 2.0.6) - this replaces the payload bytes in place."
+      ]
     },
     {
       "id": "reset_presets_2_0_5",
