@@ -130,6 +130,24 @@
       }
     },
     {
+      "id": "legacy_application_named_ports",
+      "state": "application",
+      "hardware": ["12step1"],
+      "firmware": { "minInclusive": "1.0.9" },
+      "productStrings": ["12Step"],
+      "portLayout": {
+        "style": "named",
+        "inputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "expander", "name": "Expander" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "control_surface", "name": "Control Surface" },
+          { "index": 2, "role": "expander", "name": "Expander" }
+        ]
+      }
+    },
+    {
       "id": "12step2_application",
       "state": "application",
       "hardware": ["12step2"],
