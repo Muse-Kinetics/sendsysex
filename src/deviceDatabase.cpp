@@ -456,11 +456,21 @@ std::string deviceDatabase::normalizeWinUWP(const std::string &raw) const
 }
 
 // ---------------------------------------------------------------------------
-// CoreAudioMIDI normalizer (macOS)
+// CoreAudioMIDI normalizer (macOS) - also used for Windows MIDI Services (WMS)
 //
 // Named ports: "QuNexus Control Surface"  -> directly canonical when lowercased
 // Unnamed:     "QuNexus Port 1"           -> lookup by index
 // Spanish:     "QuNexus Puerto 1"         -> normalize "puerto"/"peurto" first
+//
+// WMS quirk: unlike real CoreMIDI, which suffixes *every* port of an unnamed
+// multi-port device ("QuNexus Port 1", "QuNexus Port 2"), Windows MIDI
+// Services leaves port 1 completely bare ("12Step") and only suffixes port 2+
+// ("12Step 2") - confirmed on a real legacy 12 Step unit. A bare name with no
+// trailing index therefore has two possible meanings: a fully-named canonical
+// descriptor for a genuinely named port (self-contained, matches knownPorts_
+// directly), or WMS's unsuffixed port 1 of an otherwise unnamed multi-port
+// device. Try the direct match first; only fall back to the port-1 lookup if
+// the bare name isn't already a registered canonical name.
 // ---------------------------------------------------------------------------
 std::string deviceDatabase::normalizeCoreAudioMIDI(const std::string &raw) const
 {
@@ -512,8 +522,15 @@ std::string deviceDatabase::normalizeCoreAudioMIDI(const std::string &raw) const
         }
     }
 
-    // No trailing index: the full string is the canonical name (named USB descriptor).
-    return toLowerCopy(work);
+    // No trailing index. Prefer a direct match (named USB descriptor, or a
+    // genuinely single-port device's bare product name). If that fails, this
+    // may be WMS's unsuffixed port 1 of an unnamed multi-port device.
+    const std::string bareLower = toLowerCopy(work);
+    for (std::size_t i = 0; i < knownPorts_.size(); ++i)
+        if (knownPorts_[i].normalizedName == bareLower)
+            return bareLower;
+
+    return lookupByIndex(bareLower, 1);
 }
 
 // ---------------------------------------------------------------------------

@@ -55,11 +55,25 @@
       "version": "1.0.8",
       "path": "syx/12Step/12 Step Firmware v1.0.8_cs512.syx",
       "hardware": ["12step1", "12step2"],
+      "notes": [
+        "Chunk-safe (-cs512) packaging via the shared Hex_to_SysEx tool, built from 12-step-firmware's SysEx_and_Hex_Images/make_sysex_app.ps1.",
+        "Addressed with product ID 21 (0x15, the bootloader's own PID) rather than either application hardware revision's PID (20/22), so it works unmodified for both 12step1 and 12step2.",
+        "Superseded by firmware_1_0_9's boot-tare capture and revised on/off threshold defaults."
+      ]
+    },
+    {
+      "id": "firmware_1_0_9",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.9",
+      "path": "syx/12Step/12 Step Firmware v1.0.9_cs512.syx",
+      "hardware": ["12step1", "12step2"],
       "default": true,
       "latest": true,
       "notes": [
         "Chunk-safe (-cs512) packaging via the shared Hex_to_SysEx tool, built from 12-step-firmware's SysEx_and_Hex_Images/make_sysex_app.ps1.",
-        "Addressed with product ID 21 (0x15, the bootloader's own PID) rather than either application hardware revision's PID (20/22), so it works unmodified for both 12step1 and 12step2."
+        "Addressed with product ID 21 (0x15, the bootloader's own PID) rather than either application hardware revision's PID (20/22), so it works unmodified for both 12step1 and 12step2.",
+        "Adds a 1-second boot-time tare capture for key/select sensors (margined +25%, clamped to 2/3 of the usable range) to reduce stuck-key false triggers, and raises the default on/off pressure thresholds (20/15) with an enforced off >= on/2 floor."
       ]
     }
   ],
