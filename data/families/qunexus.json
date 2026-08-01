@@ -48,10 +48,22 @@
       "targetState": "bootloader",
       "version": "2.2.0",
       "path": "syx/QuNexus/QuNexus Firmware v2.2.0_cs512.syx",
+      "notes": [
+        "Chunk-safe (-cs512) packaging via QuNexus's SysEx_and_Hex_Images/make_sysex_app.ps1.",
+        "Superseded by firmware_2_2_1_cs512."
+      ]
+    },
+    {
+      "id": "firmware_2_2_1_cs512",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.2.1",
+      "path": "syx/QuNexus/QuNexus Firmware v2.2.1_cs512.syx",
       "default": true,
       "latest": true,
       "notes": [
-        "Chunk-safe (-cs512) packaging via QuNexus's SysEx_and_Hex_Images/make_sysex_app.ps1."
+        "Chunk-safe (-cs512) packaging via QuNexus's SysEx_and_Hex_Images/make_sysex_app.ps1.",
+        "Boot-tare capture for stuck keys, fixed pressure/bend/CC zeroing out at positive per-key sensitivity."
       ]
     }
   ],
