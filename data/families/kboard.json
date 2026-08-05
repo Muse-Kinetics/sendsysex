@@ -42,9 +42,17 @@
       "targetState": "bootloader",
       "version": "1.2.1",
       "path": "syx/K-Board/K-Board Firmware v1.2.1.syx",
+      "notes": ["Superseded by firmware_1_2_2."]
+    },
+    {
+      "id": "firmware_1_2_2",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.2.2",
+      "path": "syx/K-Board/K-Board Firmware v1.2.2_cs512.syx",
       "default": true,
       "latest": true,
-      "notes": ["Preferred current production K-Board firmware payload."]
+      "notes": ["Preferred current production K-Board firmware payload. Chunk-safe (-cs512) packaging.", "Adds finalizeTareCapture(): a one-time +25% margin applied to the settled boot-time tare average for key/button/bend-pad sensors, capped at 2/3 of range, to reduce reported key over-sensitivity. Bench-validated on real hardware."]
     },
     {
       "id": "firmware_9_0_1",
