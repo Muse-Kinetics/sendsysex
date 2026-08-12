@@ -35,9 +35,7 @@
       "targetState": "bootloader",
       "version": "1.2.1.1",
       "path": "syx/KBP4/v1.2.1.1_kbp4_central.syx",
-      "default": true,
-      "latest": true,
-      "notes": ["Central firmware payload for the current K-Board Pro 4 update set."]
+      "notes": ["Superseded by firmware_1_2_2_0_central."]
     },
     {
       "id": "firmware_1_2_1_1_peripheral",
@@ -45,9 +43,37 @@
       "targetState": "bootloader",
       "version": "1.2.1.1",
       "path": "syx/KBP4/v1.2.1.1_kbp4_peripheral.syx",
+      "notes": ["Superseded by firmware_1_2_2_0_peripheral.", "targetState here is wrong (see firmware_1_2_2_0_peripheral note) - kept as bootloader only to match this superseded entry's original (also-wrong) filing; do not use."]
+    },
+    {
+      "id": "firmware_1_2_2_0_central",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.2.2.0",
+      "path": "syx/KBP4/v1.2.2.0_kbp4_central.syx",
       "default": true,
       "latest": true,
-      "notes": ["Peripheral firmware payload for the current K-Board Pro 4 update set."]
+      "notes": [
+        "Central firmware payload, current release candidate (Keil_release_dev, commit a03c344). Adds I2C_LOCK_BOOTLOADER: Central auto-locks its own and all 4 peripherals' bootloaders once it detects a fully-assembled 4-peripheral unit.",
+        "Single monolithic SysEx message (51913 bytes, exactly one F0...F7 pair) - a flat 512-byte-page flash image (PAGE_BEGINS/page_num/checksum/data), NOT Hex_to_SysEx's Intel-HEX-line-chunked format. The Central bootloader's payload parser only understands the page format; it cannot parse a Hex_to_SysEx-style multi-chunk file at all.",
+        "Do not send this as (or repackage it into) multiple independently-framed F0...F7 messages. packet_data_init() in the Central bootloader's MIDI_sysex.c calls erase_app() unconditionally on every validated message header with no once-per-transfer guard, so a second top-level SysEx message re-erases the entire app region and destroys whatever the first message just wrote. Only sendsysex's single-message sub-split path (-cs/-cd slicing the one F0...F7 message's bytes into smaller transport writes, inserting no new SysEx framing) is safe here - same mechanism already hardware-validated on BopPad. See k-board_pro_firmware's Firmware/_sysex_maker/BOOTLOADER_SYSEX_CAPABILITIES.md for the full investigation.",
+        "-cs 512 -cd 100 are the validated BopPad defaults (also sendsysex's own defaults); not yet independently hardware-validated against KBP4 central specifically as of this entry."
+      ]
+    },
+    {
+      "id": "firmware_1_2_2_0_peripheral",
+      "type": "firmware",
+      "targetState": "application",
+      "version": "1.2.2.0",
+      "path": "syx/KBP4/v1.2.2.0_kbp4_peripheral.syx",
+      "default": true,
+      "latest": true,
+      "notes": [
+        "Peripheral firmware payload, current release candidate (Keil_release_dev, commit a03c344).",
+        "targetState is application, not bootloader: the Peripheral bootloader has no SysEx/MIDI parser at all (no MIDI/ code in kbp4_peripheral_bootloader) and is only reachable over I2C. This payload must be sent to the Central APPLICATION port (message ID 0x2110/FIRMWARE_PERIPH_MESSAGE) while Central is running its normal app firmware, not the Central bootloader port. Central's app then puts all 4 peripherals into their own bootloaders over I2C, erases them, and relays this same page-formatted payload to each one as I2C_BLOCK_WRITE_FOLLOWS messages.",
+        "Same single-monolithic-message / page-format constraints as firmware_1_2_2_0_central apply here too - see that entry's notes and BOOTLOADER_SYSEX_CAPABILITIES.md.",
+        "Not yet exercised via sendsysex as of this entry; central-only testing is the current priority."
+      ]
     }
   ],
   "profiles": [
