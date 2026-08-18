@@ -97,12 +97,15 @@ void printHelp()
         << "                             ignored). One of: 12Step, BopPad, K-Board, KBP4,\n"
         << "                             MalletStation, QuNeo, QuNexus, SoftStep\n"
         << "                             (--fw-update=<family> is also accepted)\n"
-        << "                             KBP4 sends Peripheral firmware (while still in application mode,\n"
-        << "                             relayed over I2C) then Central firmware (after rebooting into\n"
-        << "                             its bootloader), both with -fcs 32 -fgd 3000 -cd 150 -pd 3000\n"
-        << "                             applied automatically, regardless of --midi-backend (needed for\n"
-        << "                             a reliable transfer under both WinMM and WMS) - pass any of\n"
-        << "                             those flags explicitly to override.\n"
+        << "                             Families may define transport.firmwareUpdateDefaults in their\n"
+        << "                             JSON (-fcs/-fgd/-cd/-pd applied automatically, regardless of\n"
+        << "                             --midi-backend); currently only KBP4 does, needing a small first\n"
+        << "                             window + long settle gap before its receiver's blocking flash-\n"
+        << "                             erase op finishes (-fcs 32 -fgd 3000 -cd 150 -pd 3000) - pass\n"
+        << "                             any of those flags explicitly on the command line to override.\n"
+        << "                             KBP4 also sends Peripheral firmware (while still in application\n"
+        << "                             mode, relayed over I2C) then Central firmware (after rebooting\n"
+        << "                             into its bootloader).\n"
         << "  --fw-version <version>     Firmware version; omit to use the default from the family JSON\n"
         << "                             (--fw-version=<version> is also accepted)\n"
         << "  --id-request <family>      Connect, send an identity request, print the reply, then exit\n"
@@ -133,10 +136,11 @@ void printHelp()
         << "                              For devices whose receiver starts a blocking operation\n"
         << "                              (e.g. a flash erase) as soon as it recognizes the message\n"
         << "                              header in the first window, needing several seconds' grace\n"
-        << "                              before it can accept the next one. --fw-update kbp4 applies\n"
-        << "                              -fcs 32 -fgd 3000 -cd 150 -pd 3000 automatically (see above);\n"
-        << "                              for raw send (-p/-n -f) against KBP4, pass them explicitly,\n"
-        << "                              e.g. -fcs 32 -cs 512 -cd 150 -fgd 3000 -pd 3000.\n"
+        << "                              before it can accept the next one. --fw-update applies a\n"
+        << "                              family's transport.firmwareUpdateDefaults automatically if its\n"
+        << "                              JSON defines one (see above; only KBP4 does today); for raw\n"
+        << "                              send (-p/-n -f), always pass them explicitly, e.g. against\n"
+        << "                              KBP4: -fcs 32 -cs 512 -cd 150 -fgd 3000 -pd 3000.\n"
         << "\nGlobal options:\n"
         << "  --midi-backend <winmm|wms>  Windows only. Force a specific RtMidi backend instead of\n"
         << "                              auto-detecting. 'wms' fails immediately if the Windows MIDI\n"
@@ -696,27 +700,30 @@ int runAutomaticProcess(const CliOptions &options)
         }
     }
 
-    // KBP4's Central bootloader/app-relay firmware path only accepts a
-    // reliable transfer with this specific shape - see kbp4.json's payload
-    // notes and k-board_pro_firmware's .buddy-project/commands.md
-    // (2026-08-15) for the hardware investigation. Applies regardless of
-    // --midi-backend (WinMM and WMS both take it), and CLI flags still win
-    // if the user explicitly passed them.
+    // Per-family default chunking/delay profile for --fw-update (e.g. KBP4's
+    // Central bootloader/app-relay firmware path, which only accepts a
+    // reliable transfer with a small fast first window before its blocking
+    // flash-erase op, then a long settle gap - see kbp4.json's
+    // transport.firmwareUpdateDefaults for the values and the hardware
+    // investigation they came from, 2026-08-15). Generalized 2026-08-18 from
+    // a kbp4-only hardcode to a per-family JSON field so any family can opt
+    // in without another special case here; families with no such block in
+    // their JSON get all-zero defaults below, i.e. behave exactly as before.
+    // Applies regardless of --midi-backend, and CLI flags always win if the
+    // user passed them explicitly.
+    const deviceDatabase::FirmwareUpdateDefaults &familyFwDefaults = device.getFirmwareUpdateDefaults();
     unsigned int firstChunkSize = options.firstChunkSize;
     unsigned int firstGapDelayMs = options.firstGapDelayMs;
     unsigned int postDelayMs = options.postDelayMs;
     unsigned int chunkDelayMs = options.chunkDelayMs;
-    if (normalizeFamilyId(options.familyName) == "kbp4")
-    {
-        if (!options.firstChunkSizeExplicit)
-            firstChunkSize = 32U;
-        if (!options.firstGapDelayMsExplicit)
-            firstGapDelayMs = 3000U;
-        if (!options.postDelayMsExplicit)
-            postDelayMs = 3000U;
-        if (!options.chunkDelayMsExplicit)
-            chunkDelayMs = 150U;
-    }
+    if (!options.firstChunkSizeExplicit && familyFwDefaults.firstChunkSize > 0U)
+        firstChunkSize = familyFwDefaults.firstChunkSize;
+    if (!options.firstGapDelayMsExplicit && familyFwDefaults.firstGapDelayMs > 0U)
+        firstGapDelayMs = familyFwDefaults.firstGapDelayMs;
+    if (!options.postDelayMsExplicit && familyFwDefaults.postDelayMs > 0U)
+        postDelayMs = familyFwDefaults.postDelayMs;
+    if (!options.chunkDelayMsExplicit && familyFwDefaults.chunkDelayMs > 0U)
+        chunkDelayMs = familyFwDefaults.chunkDelayMs;
 
     if (!device.runAutomaticUpdate(options.chunkSize, chunkDelayMs, options.pollSeconds, postDelayMs, firstGapDelayMs, firstChunkSize))
     {

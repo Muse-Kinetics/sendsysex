@@ -27,6 +27,18 @@
       "Central's BOOTLOADER replies to a standard Universal Non-Realtime Device Inquiry (F0 7E 7F 06 01 F7) with a real Identity Reply (06 02) - handled generically by kmiDevice::midiCppIDReplyCallback(). Central's APPLICATION firmware detects the same inquiry (MIDI_sysex.c's sx_process(), CORE_SX_HEADER case) but replies with a KMI-proprietary \"editor message\" instead (SYX_FORMAT_KBP4_EDITOR_MESSAGE / SYX_FIRMWARE_VERSION_MSG=16, built by preset_sysex.c's send_firmware_version()) - found 2026-08-17 when --id-request kbp4 timed out every time in application mode despite working immediately in bootloader mode. kmiDevice::midiCppHostMessageCallback() (added the same day) parses this second reply format directly from the raw RX buffer (offsets documented in that function) and populates the same bootloaderVersion/applicationVersion fields - CONFIRMED on real hardware, both --midi-backend winmm and wms, reporting Bootloader version: 1.3.0 / Application version: 1.2.2 after a --fw-update KBP4 run, which is what first let us verify a flashed v1.2.2.0 image had actually landed and booted (the app only self-reports into the shared boot-status page after successfully running checkBootByte()/writeBootByte(), so a correct readback here is real evidence of a good flash, not just a SysEx transfer with no reported error). This reply carries no manufacturer/product/family ID fields, unlike the bootloader's real Identity Reply."
     ]
   },
+  "transport": {
+    "firmwareUpdateDefaults": {
+      "firstChunkSize": 32,
+      "firstGapDelayMs": 3000,
+      "chunkDelayMs": 150,
+      "postDelayMs": 3000,
+      "notes": [
+        "Generalized 2026-08-18 from a kbp4-only hardcode in SendSysEx.cpp's runAutomaticProcess() into this per-family field - same values, no behavior change for KBP4. Applied automatically by --fw-update to both the Peripheral and Central sends, regardless of --midi-backend; any of these still lose to an explicit -fcs/-fgd/-cd/-pd CLI flag.",
+        "Central's application-mode SysEx relay (and its bootloader's page-format parser) recognizes a valid message header within the first ~24 bytes and immediately starts a blocking operation on its end (consistent with an I2C flash-erase on the peripheral MCU it's relaying to, or the bootloader's own erase_app()) before it can accept more USB data. firstChunkSize=32 clears the host fast enough to avoid landing mid-blocking-op; firstGapDelayMs=3000 then gives the device several seconds' grace before the next window, after which it drains the rest of the transfer at chunkDelayMs=150. postDelayMs=3000 gives the bootloader/relay extra time to finish writing/verifying and reboot before the port closes. See firmware_1_2_2_0_central and firmware_1_2_2_0_peripheral's own notes below for the full hardware investigation and validated command history this was derived from (2026-08-13 through 08-17)."
+      ]
+    }
+  },
   "payloads": [
     {
       "id": "enter_bootloader",

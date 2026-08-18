@@ -69,6 +69,7 @@ public:
     bool hasReceivedIdentity() const;
     const std::string &getActiveOutputPortName() const;
     bool getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path) const;
+    const deviceDatabase::FirmwareUpdateDefaults &getFirmwareUpdateDefaults() const;
     const std::string &getLastError() const;
     void printPortTranslations() const;
     void printIdentityMetadata() const;

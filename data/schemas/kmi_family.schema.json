@@ -80,6 +80,17 @@
           "type": "boolean",
           "description": "Set true when this family's SysEx preamble parser stops reading at a fixed byte count without regard for the 7-bit/8-bit decode's group boundaries (SX_ENCODE_LEN), so the first payload byte of a sendSyxFormattedMessage()-based command can land in the same decode group as the tail of the preamble and be silently dropped unless the sender flushes after the preamble (SysExMessageTX::setFlush(SYX_FLUSH_YES), or firmware_tester's --flush-after-preamble). Discovered on K-Board; also documented for EM Pro Riser in mk_firmware_tester/lib/midi_cpp's own source comments."
         },
+        "firmwareUpdateDefaults": {
+          "type": "object",
+          "description": "Per-family default chunking/delay profile applied automatically by sendsysex's --fw-update for this family, letting a small fast first window clear the host before a receiver that starts a blocking operation (e.g. a flash erase) as soon as it sees the message header, then settle with a longer gap before the rest of the transfer proceeds at its own steady-state size/delay. Absent means --fw-update uses the tool's ordinary CLI defaults (-cs 512 -cd 100 -pd 500, -fcs/-fgd disabled) for this family, same as before this field existed. Any of these values still lose to an explicit CLI flag (-fcs/-fgd/-cd/-pd) if the user passes one. Added 2026-08-18, generalized from a KBP4-only hardcode - see kbp4.json for the field-by-field rationale.",
+          "properties": {
+            "firstChunkSize": { "type": "integer", "minimum": 0, "description": "Bytes. Overrides -cs for the very first sub-split window of the first chunk only. 0/absent disables the override." },
+            "firstGapDelayMs": { "type": "integer", "minimum": 0, "description": "Milliseconds. Overrides -cd for the single gap following that first window only. 0/absent disables the override." },
+            "chunkDelayMs": { "type": "integer", "minimum": 0, "description": "Milliseconds. Default -cd for every other gap in the transfer. Absent leaves the tool's normal -cd default (100)." },
+            "postDelayMs": { "type": "integer", "minimum": 0, "description": "Milliseconds. Default -pd, the wait after the last chunk before closing the port. Absent leaves the tool's normal -pd default (500)." },
+            "notes": { "type": "array", "items": { "type": "string" } }
+          }
+        },
         "notes": { "type": "array", "items": { "type": "string" } }
       }
     },

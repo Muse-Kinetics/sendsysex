@@ -18,6 +18,17 @@ public:
         std::string normalizedName;
     };
 
+    // Mirrors data/schemas/kmi_family.schema.json's transport.firmwareUpdateDefaults.
+    // All-zero (the default) means the family JSON has no such block, i.e. --fw-update
+    // should behave exactly as it did before this field existed for this family.
+    struct FirmwareUpdateDefaults
+    {
+        unsigned int firstChunkSize = 0;
+        unsigned int firstGapDelayMs = 0;
+        unsigned int chunkDelayMs = 0;
+        unsigned int postDelayMs = 0;
+    };
+
     deviceDatabase();
     explicit deviceDatabase(const std::string &familyId);
 
@@ -35,6 +46,7 @@ public:
     bool getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path,
                         const std::string &role = std::string()) const;
     bool getDefaultFirmwareVersion(std::string &version) const;
+    const FirmwareUpdateDefaults &getFirmwareUpdateDefaults() const;
 
     std::string normalizePortName(const std::string &rawPortName) const;
     PortDescriptor describePort(const std::string &rawPortName) const;
@@ -95,6 +107,7 @@ private:
     std::vector<std::string> firmwarePayloadVersions_;
     std::vector<KnownPort> knownPorts_;
     std::vector<PortByIndex> portsByIndex_;
+    FirmwareUpdateDefaults firmwareUpdateDefaults_;
 };
 
 #endif

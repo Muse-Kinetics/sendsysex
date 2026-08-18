@@ -26,7 +26,17 @@
     "notes": [
       "K-Board's SysEx preamble parser (MIDI_sysex.c: CORE_SX_PACKET_PREAMBLE, in both K-Board_Firmware and K-Board_Bootloader - same shared lineage) stops reading as soon as the fixed 6-byte preamble is decoded, without regard for the 7-bit/8-bit decode's 7-byte group boundaries. Without a flush after the preamble, the first payload byte of a sendSyxFormattedMessage()-based command can land in the same decode group as the tail of the preamble and get silently dropped when the firmware resets its decode buffer right after dispatching.",
       "Confirmed on hardware: firmware_tester --flush-after-preamble (or --device kboard, which reads this field) is required for SYX_CMD_TEST_MODE/SYX_CMD_BURST_MODE payloads to land correctly; without it the command is silently no-op'd, not rejected. See k-board-firmware's .buddy-project/kboard-perf-test-design.md §10.3 for the full investigation."
-    ]
+    ],
+    "firmwareUpdateDefaults": {
+      "firstChunkSize": 64,
+      "firstGapDelayMs": 3000,
+      "chunkDelayMs": 150,
+      "postDelayMs": 3000,
+      "notes": [
+        "Validated on real hardware 2026-08-18 (mimic_hub bring-up, K-Board on a Mimic Hub port): `SendSysEx -p <port> -f 'K-Board Firmware v9.0.1.syx' -fcs 64 -fgd 3000 -cs 512 -cd 150 -pd 3000` completed with zero errors. Same underlying receiver behavior as KBP4 (see kbp4.json's own firmwareUpdateDefaults) - the bootloader's `flashErased` flag causes it to erase the entire application region unconditionally on the first valid firmware packet, blocking further USB service until that finishes (see sendsysex/docs/kmi_fw_update_process.md, 'Flash Layout and Boot Flow'). K-Board's own MTU tolerates a slightly larger first window than KBP4's (64B vs 32B) before the in-flight send itself starts failing mid-transmission.",
+        "This is the multi-chunk (Hex_to_SysEx-chunked) case, unlike KBP4's single-monolithic-message payloads - K-Board's between-chunk identity-handshake already existed and worked; what was missing/broken was the first and last chunks' reply-wait windows both silently using chunkDelayMs (150ms) instead of the much longer firstGapDelayMs/postDelayMs (3000ms) already being passed - fixed in chunkedSysExTransfer.h the same day (see its inline comments and kmi_fw_update_process.md's own addendum). Before that fix, a real firmware update reported transport-level success while its EOF chunk had actually been dropped, leaving the device stuck in bootloader with no error surfaced."
+      ]
+    }
   },
   "payloads": [
     {

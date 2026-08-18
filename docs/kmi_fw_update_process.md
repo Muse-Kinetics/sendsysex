@@ -36,6 +36,14 @@ Review each product bootloader implementation before using chunked transfer in p
 
 Use the hextosysex utility to create properly chunked .syx files from intel hex.
 
+### `sendsysex`'s implementation of the above (2026-08 hardware findings)
+
+`inc/chunkedSysExTransfer.h`'s `sendChunkedFileToPort()` is the concrete implementation of "send identity requests between chunks and wait for reply" for both the raw manual path (`-p`/`-n -f`) and `--fw-update`. Two products confirmed hardware requirements beyond the basic between-chunk handshake:
+
+- **The first chunk needs its own small-window/long-settle treatment** (`-fcs`/`--first-chunk-size`, `-fgd`/`--first-gap-delay`): this doc's "on first valid firmware packet while `flashErased == 0`, the bootloader erases the full application area" is exactly why - the receiver recognizes a valid header within the first ~20-30 bytes and immediately starts a blocking flash-erase before it can accept more USB data or answer anything. A small first window clears the host fast enough to avoid landing mid-erase; the following gap needs to be several seconds, not the steady-state inter-chunk delay. First found on KBP4 (2026-08-13/15, `data/families/kbp4.json`'s `transport.firmwareUpdateDefaults`), independently confirmed on K-Board (2026-08-18, `data/families/kboard.json`'s own `transport.firmwareUpdateDefaults`) - likely applies to any C8051 product doing the same unconditional erase-on-first-packet.
+- **The post-chunk identity-reply wait must match whichever grace period that chunk's *send* used, not always the steady-state `-cd`/`--chunk-delay`** (fixed 2026-08-18): the reply wait after chunk 1 now uses `max(chunkDelayMs, firstGapDelayMs)`, and after the final chunk `max(chunkDelayMs, postDelayMs)` - both chunks were failing "NO REPLY" on real hardware even with `-fgd`/`-pd` explicitly passed, because the verification step ignored them and used the short `-cd` value regardless. Confirmed fixed against a real K-Board update (`-fcs 64 -fgd 3000 -cs 512 -cd 150 -pd 3000` now completes with no errors).
+- **The final chunk's reply is now actually checked** (fixed 2026-08-18, was previously skipped entirely - see `chunkedSysExTransfer.h`'s inline comments): a transport-level "sent successfully" no longer means the transfer landed. A real update reported success this way while the EOF chunk had silently been dropped, leaving the device stuck in bootloader with no error surfaced.
+
 ## EOF and Reboot Behavior
 
 - A normal update ends with an `END_OF_FILE` Intel HEX record.

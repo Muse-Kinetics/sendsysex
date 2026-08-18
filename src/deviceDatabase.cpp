@@ -91,6 +91,7 @@ void deviceDatabase::clear()
     firmwarePayloadVersions_.clear();
     knownPorts_.clear();
     portsByIndex_.clear();
+    firmwareUpdateDefaults_ = FirmwareUpdateDefaults();
 }
 
 bool deviceDatabase::loadFamily(const std::string &familyId)
@@ -125,6 +126,14 @@ bool deviceDatabase::loadFamily(const std::string &familyId)
     displayName_         = root.value("name", std::string());
     applicationPidMsb_  = root.at("identity").value("stateDetection", json::object()).value("applicationPidMsb", 0);
     bootloaderPidMsb_   = root.at("identity").value("stateDetection", json::object()).value("bootloaderPidMsb", 1);
+
+    {
+        const json &fwDefaults = root.value("transport", json::object()).value("firmwareUpdateDefaults", json::object());
+        firmwareUpdateDefaults_.firstChunkSize  = fwDefaults.value("firstChunkSize", 0U);
+        firmwareUpdateDefaults_.firstGapDelayMs = fwDefaults.value("firstGapDelayMs", 0U);
+        firmwareUpdateDefaults_.chunkDelayMs    = fwDefaults.value("chunkDelayMs", 0U);
+        firmwareUpdateDefaults_.postDelayMs     = fwDefaults.value("postDelayMs", 0U);
+    }
 
     for (const auto &m : root.at("discovery").at("familyMarkers"))
         appendUnique(familyMarkers_, m.get<std::string>());
@@ -292,6 +301,11 @@ bool deviceDatabase::getDefaultFirmwareVersion(std::string &version) const
     if (!defaultMatch.empty()) { version = defaultMatch; return true; }
     if (!firstMatch.empty())   { version = firstMatch;   return true; }
     return false;
+}
+
+const deviceDatabase::FirmwareUpdateDefaults &deviceDatabase::getFirmwareUpdateDefaults() const
+{
+    return firmwareUpdateDefaults_;
 }
 
 bool deviceDatabase::isSupportedFirmwareVersion(const version_t &version) const

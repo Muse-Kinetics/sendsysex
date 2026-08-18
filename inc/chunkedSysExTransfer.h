@@ -311,24 +311,63 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
         if (bytesSentOverall < totalBytes)
             std::cout << "\n";
 
-        const bool isLastChunk = (i + 1 == chunks.size());
-        if (!isLastChunk)
+        if (haveInput)
         {
-            // Give the device a moment to finish receiving/start processing the
-            // chunk before demanding a reply - firing the ID request immediately
-            // risks it landing while the chunk's tail end is still being handled
-            // on the device side and getting missed.
+            // Checked after every chunk, including the last - previously
+            // skipped for the last chunk (isLastChunk special case, removed
+            // 2026-08-18), on the assumption that a "Successfully sent all
+            // N chunk(s)" transport-level message meant the transfer landed.
+            // It didn't: a real K-Board update reported success this way
+            // while the final EOF chunk had actually been dropped (same
+            // class of receiver-busy race waitForIdReply already guards
+            // every other chunk against), leaving the device stuck in its
+            // bootloader with no error surfaced. The device stays
+            // responsive to a generic identity inquiry whether it's still
+            // in the bootloader (chunk lost) or has already rebooted into
+            // the application (chunk landed), so this check distinguishes
+            // the two cases the same way it does mid-transfer.
+            //
+            // Give the device a moment to finish receiving/start processing
+            // the chunk before demanding a reply - firing the ID request
+            // immediately risks it landing while the chunk's tail end is
+            // still being handled on the device side and getting missed.
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-            if (waitForIdReply(midiOut, replyState, chunkDelayMs))
+            // The reply-wait budget itself also needs to match whichever
+            // grace period this specific chunk's *send* used, not always
+            // chunkDelayMs - found 2026-08-18 from a real transfer that
+            // failed at chunk 1 (used firstChunkSize/firstGapDelayMs because
+            // the receiver needs it) and separately at the final chunk,
+            // both with "NO REPLY within 150ms" (chunkDelayMs) even though
+            // -fgd 3000/-pd 3000 had been explicitly passed for exactly
+            // this reason. Chunk 0's sub-split gap already waits
+            // firstGapDelayMs *between* its windows for the same receiver
+            // behavior - the reply wait right after it needs at least that
+            // much grace too, not the steady-state inter-chunk delay. The
+            // final chunk is the same idea: postDelayMs exists specifically
+            // because the receiver may need extra time (write/verify/
+            // reboot-prep) after the last chunk before it can talk again.
+            const bool usedFirstChunkGrace = (i == 0 && firstChunkSize > 0 && firstChunkSize < chunk.length);
+            const bool isLastChunk = (i + 1 == chunks.size());
+            unsigned int replyWaitMs = chunkDelayMs;
+            if (usedFirstChunkGrace)
+                replyWaitMs = std::max(replyWaitMs, firstGapDelayMs);
+            if (isLastChunk)
+                replyWaitMs = std::max(replyWaitMs, postDelayMs);
+
+            if (waitForIdReply(midiOut, replyState, replyWaitMs))
             {
                 std::cout << "  reply OK (" << (chunks.size() - i - 1) << " chunk(s) remaining)\n";
             }
             else
             {
-                std::cout << "  NO REPLY within " << chunkDelayMs << " ms\n";
+                std::cout << "  NO REPLY within " << replyWaitMs << " ms\n";
                 errorMessage = "No identity reply after chunk " + std::to_string(i + 1) + "/"
-                              + std::to_string(chunks.size()) + " - aborting transfer.";
+                              + std::to_string(chunks.size())
+                              + (isLastChunk
+                                     ? " (the final chunk) - the device may not have received it and could"
+                                       " still be sitting in its bootloader; aborting transfer."
+                                     : " - aborting transfer.");
                 ok = false;
             }
         }

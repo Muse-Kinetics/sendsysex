@@ -464,6 +464,11 @@ bool kmiDevice::getPayloadPath(const std::string &payloadType, const version_t *
     return database_.getPayloadPath(payloadType, version, path);
 }
 
+const deviceDatabase::FirmwareUpdateDefaults &kmiDevice::getFirmwareUpdateDefaults() const
+{
+    return database_.getFirmwareUpdateDefaults();
+}
+
 const std::string &kmiDevice::getLastError() const
 {
     return lastError_;
