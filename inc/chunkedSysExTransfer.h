@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -156,6 +157,34 @@ inline bool waitForIdReply(RtMidiOut &midiOut, ChunkReplyState &state, unsigned 
 // is not a valid SysEx split and can corrupt that message - callers should
 // pass a chunkSize comfortably at or above the packaging tool's chunk size,
 // not try to cut it close (see k-board-firmware's commands.md, 2026-07-16).
+// firstGapDelayMs, when nonzero, overrides chunkDelayMs for the single gap
+// following the very first sub-split window of the first chunk only; every
+// other gap (including all later chunks' sub-split windows) still uses
+// chunkDelayMs. 0 disables the override entirely (every gap uses
+// chunkDelayMs, matching this function's original behavior).
+//
+// firstChunkSize, when nonzero, overrides chunkSize for the very first
+// sub-split window of the first chunk only; every later window (including
+// the rest of the first chunk) still uses chunkSize. 0 disables the
+// override entirely (every window uses chunkSize, matching this function's
+// original behavior). Lets a small, fast-clearing first window (avoiding a
+// mid-transmission stall - see firstGapDelayMs below) be paired with a
+// larger, more efficient window size for the remainder of the transfer once
+// the receiver's settled.
+//
+// Added for KBP4: the Central device's application-mode SysEx relay
+// recognizes a valid message header (the packet's first ~24 bytes) as soon
+// as it arrives and immediately starts a blocking operation on its end
+// (observed: consistent with an I2C flash-erase on the peripheral MCU it's
+// relaying to) before it can accept more USB data. A short first window
+// (comfortably under the ~64-byte point where the transfer itself starts
+// landing mid-blocking-op) clears the host fast enough to avoid that, but
+// the *next* window still needs several seconds' grace before the device
+// is ready again - after which it drains the rest of the transfer at
+// normal chunkDelayMs speed and can use a larger chunkSize than the first
+// window needed. See kbp4.json's payload notes and
+// k-board_pro_firmware's .buddy-project/commands.md (2026-08-13) for the
+// hardware investigation this came from.
 inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                                   const std::string &outputPortName,
                                   const std::vector<unsigned char> &bytes,
@@ -163,7 +192,9 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                                   unsigned int chunkSize,
                                   unsigned int chunkDelayMs,
                                   unsigned int postDelayMs,
-                                  std::string &errorMessage)
+                                  std::string &errorMessage,
+                                  unsigned int firstGapDelayMs = 0,
+                                  unsigned int firstChunkSize = 0)
 {
     if (chunks.empty())
     {
@@ -220,13 +251,23 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
 
         try
         {
-            if (chunkSize < chunk.length)
+            // firstChunkSize only ever applies to the very first window of the
+            // very first chunk (i == 0) - later chunks (multi-chunk Hex_to_SysEx
+            // files) and later windows within this chunk always use chunkSize.
+            const bool useFirstChunkSize = (i == 0 && firstChunkSize > 0 && firstChunkSize < chunk.length);
+            if (chunkSize < chunk.length || useFirstChunkSize)
             {
-                std::cout << "  sub-split into " << chunkSize << "-byte windows (chunk size < message length)\n";
+                if (useFirstChunkSize)
+                    std::cout << "  sub-split: first window " << firstChunkSize
+                              << " bytes, then " << chunkSize << "-byte windows\n";
+                else
+                    std::cout << "  sub-split into " << chunkSize << "-byte windows (chunk size < message length)\n";
                 std::size_t sent = 0;
+                bool isFirstWindow = true;
                 while (sent < chunk.length)
                 {
-                    const std::size_t sizeToSend = std::min<std::size_t>(chunkSize, chunk.length - sent);
+                    const std::size_t windowSize = (isFirstWindow && useFirstChunkSize) ? firstChunkSize : chunkSize;
+                    const std::size_t sizeToSend = std::min<std::size_t>(windowSize, chunk.length - sent);
                     std::vector<unsigned char> window(bytes.begin() + chunk.offset + sent,
                                                        bytes.begin() + chunk.offset + sent + sizeToSend);
                     midiOut.sendMessage(&window);
@@ -234,12 +275,15 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                     bytesSentOverall += sizeToSend;
                     printProgress(bytesSentOverall, totalBytes, sizeToSend, startTime);
 
-                    // Same throttling contract as sendFileToOpenPort()'s raw byte-slice
-                    // path: sleep chunkDelayMs between windows (not after the final one)
-                    // so a monolithic message sub-split via -cs doesn't hit the receiver
-                    // as an unthrottled back-to-back burst.
-                    if (sent < chunk.length && chunkDelayMs > 0)
-                        std::this_thread::sleep_for(std::chrono::milliseconds(chunkDelayMs));
+                    if (sent < chunk.length)
+                    {
+                        const unsigned int gapMs = (isFirstWindow && i == 0 && firstGapDelayMs > 0)
+                                                  ? firstGapDelayMs
+                                                  : chunkDelayMs;
+                        if (gapMs > 0)
+                            std::this_thread::sleep_for(std::chrono::milliseconds(gapMs));
+                        isFirstWindow = false;
+                    }
                 }
             }
             else
@@ -302,6 +346,76 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
     }
 
     return ok;
+}
+
+// Retry parameters for sendChunkedFileWithRetry(). Originally
+// kmiDevice::sendPayloadFileToPort()'s exclusively, added for WinMM
+// rejecting the first sendMessage on a freshly opened port immediately
+// after a device reboot (MMRESULT=1) even though midiOutOpen() itself
+// reported success. Factored out here 2026-08-12 so the raw manual send
+// path (-p/-n -f) gets the same protection - prompted by a
+// MidiOutWinMM::sendMessage failure on real hardware when --midi-backend
+// winmm forces WinMM on a machine actually running the WMS translation
+// layer underneath it, which is flakier than native WinMM.
+const int kChunkedSendRetryMaxAttempts = 3;
+const int kChunkedSendRetryDelayMs = 3000;
+const int kChunkedSendRetryPortSettleMs = 500;
+
+// Retries a whole chunked-file transfer up to kChunkedSendRetryMaxAttempts
+// times if it fails outright. SysEx cannot be resumed mid-message, so a
+// retry always means "close, wait for the driver to release the handle,
+// reopen, wait for it to settle, then resend the entire file from the top" -
+// never a resumption of the failed attempt.
+//
+// openPort/closePort let each caller keep its own port-resolution semantics
+// rather than this function dictating one: kmiDevice re-resolves by
+// normalized name via its device database (openTransferOutputByName);
+// SendSysEx.cpp's raw send re-resolves by the exact RtMidi port name already
+// selected, with no normalization, consistent with raw send's existing
+// documented behavior. openPort is called fresh on every attempt (including
+// the first) and must return the now-open port to send through, or nullptr
+// on failure - returning nullptr aborts immediately with no retry, matching
+// the original kmiDevice behavior (an open failure is not treated as the
+// same kind of transient condition a send failure is).
+inline bool sendChunkedFileWithRetry(const std::string &portName,
+                                     const std::vector<unsigned char> &bytes,
+                                     const std::vector<SysExChunk> &chunks,
+                                     unsigned int chunkSize,
+                                     unsigned int chunkDelayMs,
+                                     unsigned int postDelayMs,
+                                     const std::function<RtMidiOut *()> &openPort,
+                                     const std::function<void()> &closePort,
+                                     std::string &errorMessage,
+                                     unsigned int firstGapDelayMs = 0,
+                                     unsigned int firstChunkSize = 0)
+{
+    for (int attempt = 0; attempt < kChunkedSendRetryMaxAttempts; ++attempt)
+    {
+        RtMidiOut *midiOut = openPort();
+        if (midiOut == 0)
+            return false;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(kChunkedSendRetryPortSettleMs));
+
+        const bool sent = sendChunkedFileToPort(*midiOut, portName, bytes, chunks,
+                                                chunkSize, chunkDelayMs, postDelayMs, errorMessage,
+                                                firstGapDelayMs, firstChunkSize);
+        closePort();
+
+        if (sent)
+            return true;
+
+        const bool isLastAttempt = (attempt + 1 == kChunkedSendRetryMaxAttempts);
+        if (!isLastAttempt)
+        {
+            std::cout << "Send failed (" << errorMessage << "); retrying in "
+                      << (kChunkedSendRetryDelayMs / 1000) << " second(s)... (attempt "
+                      << (attempt + 2) << "/" << kChunkedSendRetryMaxAttempts << ")\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(kChunkedSendRetryDelayMs));
+        }
+    }
+
+    return false;
 }
 
 #endif // CHUNKED_SYSEX_TRANSFER_H

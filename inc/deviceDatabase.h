@@ -32,7 +32,8 @@ public:
     const std::string &getLastError() const;
 
     bool isSupportedFirmwareVersion(const version_t &version) const;
-    bool getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path) const;
+    bool getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path,
+                        const std::string &role = std::string()) const;
     bool getDefaultFirmwareVersion(std::string &version) const;
 
     std::string normalizePortName(const std::string &rawPortName) const;

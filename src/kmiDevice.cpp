@@ -51,6 +51,7 @@ kmiDevice::kmiDevice(const std::string &familyId)
     syxTx_->setCB_send(&kmiDevice::midiCppSendCallback);
     syxRx_->setCB_rx_Context(this);
     syxRx_->setCB_rx_IDReply(&kmiDevice::midiCppIDReplyCallback);
+    syxRx_->setCB_rx_HostMessage(&kmiDevice::midiCppHostMessageCallback);
 
     clearIdentityMetadata();
     if (!database_.isLoaded())
@@ -255,7 +256,9 @@ bool kmiDevice::setFwVersion(const version_t &version, bool forceUpdate)
 
 bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDelayMs,
                                    unsigned int pollIntervalSeconds,
-                                   unsigned int postDelayMs)
+                                   unsigned int postDelayMs,
+                                   unsigned int firstGapDelayMs,
+                                   unsigned int firstChunkSize)
 {
     if (!requestedFwVersionValid_)
     {
@@ -283,7 +286,23 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
     const bool hasBootloaderEntry = database_.getPayloadPath("bootloader_entry", 0, bootloaderEntryPath);
     const std::string familyName = database_.getDisplayName().empty() ? familyId_ : database_.getDisplayName();
 
+    // Multi-MCU families (currently only KBP4) can register a second
+    // firmware payload tagged role="peripheral" for an MCU that's only
+    // reachable while the primary MCU is in application mode, relaying over
+    // its own transport (KBP4: I2C) rather than by SysEx bootloader flash.
+    // Absent for every other family, so this is a no-op there. There's no
+    // way to independently version-check this payload against the device
+    // (peripherals have no MIDI identity of their own), so it's resent
+    // unconditionally whenever the primary firmware update is pending -
+    // same assumption the family JSON already encodes by versioning both
+    // payloads identically. See kbp4.json's payload notes.
+    std::string peripheralPath;
+    const bool hasPeripheralFirmware = database_.getPayloadPath("firmware", &requestedFwVersion_, peripheralPath, "peripheral");
+    bool peripheralSent = false;
+
     std::cout << "Automatic firmware update mode for " << familyName << " version " << versionToString(requestedFwVersion_) << "\n";
+    if (hasPeripheralFirmware)
+        std::cout << "Loading \"" << peripheralPath << "\"\n";
     if (hasBootloaderEntry)
         std::cout << "Loading \"" << bootloaderEntryPath << "\"\n";
     std::cout << "Loading \"" << firmwarePath << "\"\n";
@@ -307,7 +326,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
                 return false;
 
             firmwareSent = true;
@@ -329,6 +348,18 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
 
         const std::string applicationPort = activeOutputPortName_;
         disconnect();
+
+        // Peripheral firmware (when this family has one) must go out first,
+        // while the primary MCU is still in application mode - the
+        // bootloader-entry command below reboots it into a state where the
+        // relay is no longer available.
+        if (hasPeripheralFirmware && !peripheralSent)
+        {
+            if (!sendPayloadFileToPort(peripheralPath, applicationPort, chunkSize, chunkDelayMs, "peripheral firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
+                return false;
+            peripheralSent = true;
+        }
+
         if (!sendPayloadFileToPort(bootloaderEntryPath, applicationPort, chunkSize, chunkDelayMs, "bootloader-entry", postDelayMs))
             return false;
 
@@ -347,7 +378,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
                 return false;
 
             firmwareSent = true;
@@ -364,6 +395,24 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
         if (state_ == State::connected)
         {
             std::cout << "Found application port: " << activeOutputPortName_ << "\n";
+
+            // Catches the case where the device was already in bootloader
+            // mode when this run started (e.g. resuming after a prior
+            // interrupted attempt) - the peripheral send above never ran
+            // since it requires application mode, so do it now that we're
+            // confirmed back in application mode instead of silently
+            // skipping it. In the normal case (device started in
+            // application mode) this is a no-op: peripheralSent is already
+            // true from the send above.
+            if (hasPeripheralFirmware && !peripheralSent)
+            {
+                const std::string applicationPort = activeOutputPortName_;
+                disconnect();
+                if (!sendPayloadFileToPort(peripheralPath, applicationPort, chunkSize, chunkDelayMs, "peripheral firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
+                    return false;
+                peripheralSent = true;
+            }
+
             return true;
         }
     }
@@ -493,41 +542,6 @@ bool kmiDevice::sendFileToOpenPort(RtMidiOut &midiOut,
     }
 
     return false;
-}
-
-// F0/F7-aware chunk detection plus the between-chunk identity handshake,
-// shared (chunkedSysExTransfer.h) with SendSysEx.cpp's manual raw-send path.
-// Unlike sendFileToOpenPort() above (a single write, or a naive fixed-size
-// byte-slice with no framing or handshake awareness - correct only for the
-// historical one-giant-message format), this is what firmware payloads
-// actually need: Hex_to_SysEx-chunked files are many independently-framed
-// F0...F7 messages, and without a handshake a dropped/corrupted chunk sends
-// silently instead of aborting.
-bool kmiDevice::sendChunkedFirmwareToPort(const std::string &filePath,
-                                          const std::string &portName,
-                                          unsigned int chunkSize,
-                                          unsigned int chunkDelayMs,
-                                          unsigned int postDelayMs)
-{
-    if (transferOut_ == 0)
-    {
-        lastError_ = "Transfer output port is not open.";
-        return false;
-    }
-
-    std::vector<unsigned char> bytes;
-    if (!readBinaryFile(filePath, bytes, &lastError_))
-        return false;
-
-    if (bytes.size() > MAX_MIDI_SYSEX_SIZE)
-    {
-        lastError_ = "SysEx file exceeds the supported send buffer size.";
-        return false;
-    }
-
-    const std::vector<SysExChunk> chunks = findSysExChunks(bytes);
-    return sendChunkedFileToPort(*transferOut_, portName, bytes, chunks,
-                                 chunkSize, chunkDelayMs, postDelayMs, lastError_);
 }
 
 void kmiDevice::clearIdentityMetadata()
@@ -931,49 +945,37 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
                                       unsigned int chunkSize,
                                       unsigned int chunkDelayMs,
                                       const std::string &label,
-                                      unsigned int postDelayMs)
+                                      unsigned int postDelayMs,
+                                      unsigned int firstGapDelayMs,
+                                      unsigned int firstChunkSize)
 {
-    // On Windows, the WinMM driver may reject the first sendMessage on a
-    // freshly opened port immediately after a device reboot (MMRESULT=1),
-    // even though midiOutOpen() reported success.  Retry up to 3 times;
-    // on each retry close the handle, wait for the driver to fully release
-    // the device, then reopen.  This covers the common case where a device
-    // reboots into bootloader mode and its USB transfer endpoint is not yet
-    // ready to accept data.
-    static const int kMaxAttempts = 3;
-    static const int kRetryDelayMs = 3000;
+    std::vector<unsigned char> bytes;
+    if (!readBinaryFile(filePath, bytes, &lastError_))
+        return false;
 
-    for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
+    if (bytes.size() > MAX_MIDI_SYSEX_SIZE)
     {
-        if (!openTransferOutputByName(portName))
-            return false;
-
-        // Give WinMM a moment to settle after any recently closed handles
-        // before issuing the first sendMessage on the freshly opened port.
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-        std::cout << "Opening port: " << portName << "\n";
-        std::cout << "Sending " << label << " to port: " << portName << "\n";
-
-        // sendChunkedFirmwareToPort() handles both single-message payloads
-        // (bootloader-entry: no handshake attempted, same as before) and
-        // multi-chunk firmware images (F0/F7-aware chunking plus the
-        // between-chunk identity handshake) transparently based on how many
-        // complete SysEx messages the file actually contains.
-        const bool sent = sendChunkedFirmwareToPort(filePath, portName, chunkSize, chunkDelayMs, postDelayMs);
-        closeTransferPort();
-
-        if (sent)
-            return true;
-
-        if (attempt + 1 < kMaxAttempts)
-        {
-            std::cout << "Port not ready, retrying in " << (kRetryDelayMs / 1000) << " second(s)...\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
-        }
+        lastError_ = "SysEx file exceeds the supported send buffer size.";
+        return false;
     }
 
-    return false;
+    std::cout << "Sending " << label << " to port: " << portName << "\n";
+
+    // Retry loop (port-not-ready-after-reboot recovery: WinMM may reject the
+    // first sendMessage on a freshly opened port immediately after a device
+    // reboot (MMRESULT=1) even though midiOutOpen() itself reported success)
+    // now lives in chunkedSysExTransfer.h, shared with SendSysEx.cpp's raw
+    // send path. openPort here keeps this class's own normalized-name
+    // port-resolution semantics (openTransferOutputByName/database_), unlike
+    // raw send's exact-name resolution - only the retry shape is shared.
+    const std::vector<SysExChunk> chunks = findSysExChunks(bytes);
+    return sendChunkedFileWithRetry(
+        portName, bytes, chunks, chunkSize, chunkDelayMs, postDelayMs,
+        [this, &portName]() -> RtMidiOut * {
+            return openTransferOutputByName(portName) ? transferOut_ : 0;
+        },
+        [this]() { closeTransferPort(); },
+        lastError_, firstGapDelayMs, firstChunkSize);
 }
 
 void kmiDevice::processIncomingMessage(const std::vector<unsigned char> &message)
@@ -1060,6 +1062,70 @@ void kmiDevice::midiCppIDReplyCallback(void *userData, SYSEX_DEVICE_INQUIRY_REPL
     self->identityMetadata_.applicationVersion.dev = 0;
     self->identityMetadata_.bootloaderStateKnown = true;
     self->identityMetadata_.isBootloader = (self->identityMetadata_.productIdMsb == self->database_.getBootloaderPidMsb());
+    self->pendingIdentityRequest_ = false;
+    self->handleIdentityStateUpdate();
+}
+
+// KBP4's Central APPLICATION firmware detects a standard Universal
+// Non-Realtime Device Inquiry (F0 7E 7F 06 01 F7 - see MIDI_sysex.c's
+// sx_process(), CORE_SX_HEADER case) but does not reply with a
+// standards-format Identity Reply (06 02). It dispatches to
+// send_firmware_version() (preset_sysex.c) instead, which replies with a
+// KMI-proprietary "editor message" (SYX_FORMAT_KBP4_EDITOR_MESSAGE, msg
+// type SYX_FIRMWARE_VERSION_MSG) that midiCppIDReplyCallback() above never
+// sees - confirmed on real hardware 2026-08-17 (--id-request kbp4 always
+// timed out in application mode, worked fine in bootloader mode, which
+// does reply with a real Identity Reply). CORE_SX_HOST_DATA's own decode
+// (msg_type/data_val/int_val, the latter packed as 3x7bit) is shaped for a
+// different, smaller class of KBP4 editor messages and can't carry this
+// reply's 16-byte version payload, so this callback re-reads the full raw
+// RX buffer directly instead of trusting dataVal/intVal.
+//
+// Byte layout and SYX_FIRMWARE_VERSION_MSG's value (16) come from
+// k-board_pro_firmware's
+// Firmware/Keil_release_dev/kbp4_shared_code/I2C_shared/i2c_kbp4_shared.h
+// (enum SYX_MESSAGE_TYPE) and .../kbp4_central/code/Main/preset_sysex.c
+// (send_firmware_version()) - keep in sync if either changes. Version byte
+// order (major,minor,patch,dev, direct - no swapping) confirmed against
+// .../bootloader/kbp4_bootloader_shared_code/Boot/app_shared.c's
+// array_form[0..3] assignment.
+void kmiDevice::midiCppHostMessageCallback(void *userData, uint8_t msgType, uint8_t /*dataVal*/, uint16_t /*intVal*/)
+{
+    if (userData == 0)
+        return;
+
+    kmiDevice *self = static_cast<kmiDevice *>(userData);
+
+    const uint8_t kKbp4FirmwareVersionMsgType = 16;
+    if (self->familyId_ != "kbp4" || msgType != kKbp4FirmwareVersionMsgType || self->syxRx_ == 0)
+        return;
+
+    const uint8_t *buf = self->syxRx_->getData();
+    const std::size_t len = self->syxRx_->getSize();
+
+    // buffer[6]=length, [7]=msg type tag (== msgType above), [8..11]=Central
+    // bootloader version, [12..15]=Central application version. [16..23]
+    // would be Peripheral boot/app version, but preset_sysex.c currently
+    // just duplicates the Central bytes there ("not yet implemented") - not
+    // parsed here since it isn't real data.
+    if (buf == 0 || len < 16)
+        return;
+
+    self->identityMetadata_.received = true;
+    self->identityMetadata_.bootloaderVersion.major = buf[8];
+    self->identityMetadata_.bootloaderVersion.minor = buf[9];
+    self->identityMetadata_.bootloaderVersion.patch = buf[10];
+    self->identityMetadata_.bootloaderVersion.dev   = buf[11];
+    self->identityMetadata_.applicationVersion.major = buf[12];
+    self->identityMetadata_.applicationVersion.minor = buf[13];
+    self->identityMetadata_.applicationVersion.patch = buf[14];
+    self->identityMetadata_.applicationVersion.dev   = buf[15];
+    // This reply carries no manufacturer/product/family ID fields (unlike
+    // SYSEX_DEVICE_INQUIRY_REPLY) and no reliable bootloader-vs-application
+    // signal of its own, so bootloaderStateKnown is deliberately left
+    // false - handleIdentityStateUpdate() already falls back to port-name
+    // matching in that case, which is correct here since this reply only
+    // ever comes from the application, never the bootloader.
     self->pendingIdentityRequest_ = false;
     self->handleIdentityStateUpdate();
 }

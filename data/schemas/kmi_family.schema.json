@@ -36,6 +36,10 @@
         "targetState": { "type": "string", "enum": ["application", "bootloader"] },
         "version": { "type": "string" },
         "path": { "type": "string" },
+        "role": {
+          "type": "string",
+          "description": "Disambiguates multiple payloads of the same type+version that target different MCUs within one multi-MCU device (e.g. KBP4's Central vs Peripheral firmware). Absent/empty means the payload is the family's single primary target for that type - getPayloadPath() only matches role-less payloads unless a specific role is requested, so existing single-MCU families are unaffected. Added 2026-08-15 for KBP4."
+        },
         "hardware": { "type": "array", "items": { "type": "string" } },
         "default": { "type": "boolean" },
         "latest": { "type": "boolean" },

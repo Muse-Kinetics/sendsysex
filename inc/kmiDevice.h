@@ -60,7 +60,9 @@ public:
     bool setDefaultFwVersion(bool forceUpdate);
     bool runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDelayMs,
                             unsigned int pollIntervalSeconds,
-                            unsigned int postDelayMs = 500U);
+                            unsigned int postDelayMs = 500U,
+                            unsigned int firstGapDelayMs = 0,
+                            unsigned int firstChunkSize = 0);
 
     State getState() const;
     bool isFirmwareUpdatePending() const;
@@ -98,18 +100,16 @@ private:
                                unsigned int chunkSize,
                                unsigned int chunkDelayMs,
                                const std::string &label,
-                               unsigned int postDelayMs = 500U);
-    bool sendChunkedFirmwareToPort(const std::string &filePath,
-                                   const std::string &portName,
-                                   unsigned int chunkSize,
-                                   unsigned int chunkDelayMs,
-                                   unsigned int postDelayMs);
+                               unsigned int postDelayMs = 500U,
+                               unsigned int firstGapDelayMs = 0,
+                               unsigned int firstChunkSize = 0);
     void processIncomingMessage(const std::vector<unsigned char> &message);
     void handleIdentityStateUpdate();
     void clearIdentityMetadata();
 
     static int16_t midiCppSendCallback(void *userData, uint8_t *data, uint16_t length);
     static void midiCppIDReplyCallback(void *userData, SYSEX_DEVICE_INQUIRY_REPLY *reply);
+    static void midiCppHostMessageCallback(void *userData, uint8_t msgType, uint8_t dataVal, uint16_t intVal);
     static void midiInputCallback(double timeStamp, std::vector<unsigned char> *message, void *userData);
 
     std::string familyId_;

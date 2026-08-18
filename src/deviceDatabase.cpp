@@ -296,11 +296,25 @@ bool deviceDatabase::getDefaultFirmwareVersion(std::string &version) const
 
 bool deviceDatabase::isSupportedFirmwareVersion(const version_t &version) const
 {
-    const std::string requestedVersion = versionToString(version);
-    return std::find(firmwarePayloadVersions_.begin(), firmwarePayloadVersions_.end(), requestedVersion) != firmwarePayloadVersions_.end();
+    // Compares parsed version_t structs, not raw strings: versionToString()
+    // omits a trailing ".0" dev component, so a family whose JSON spells out
+    // 4-component versions with dev=0 (e.g. KBP4's "1.2.2.0") would never
+    // string-match itself after that round trip. version_t's operator== is
+    // exact and format-independent - a JSON entry written as "2.0.4" and one
+    // written as "2.0.4.0" compare equal here, unlike with strings. Found
+    // 2026-08-15 when --fw-update KBP4 failed outright on its own default
+    // version.
+    for (const std::string &payloadVersion : firmwarePayloadVersions_)
+    {
+        version_t parsed;
+        if (parseVersionString(payloadVersion, parsed) && parsed == version)
+            return true;
+    }
+    return false;
 }
 
-bool deviceDatabase::getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path) const
+bool deviceDatabase::getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path,
+                                    const std::string &role) const
 {
     path.clear();
     if (familyPath_.empty())
@@ -313,7 +327,6 @@ bool deviceDatabase::getPayloadPath(const std::string &payloadType, const versio
     json root;
     try { fileStream >> root; } catch (...) { return false; }
 
-    const std::string requestedVersion = (version != 0) ? versionToString(*version) : std::string();
     std::string firstMatch;
     std::string defaultMatch;
     std::string latestMatch;
@@ -321,6 +334,15 @@ bool deviceDatabase::getPayloadPath(const std::string &payloadType, const versio
     for (const auto &payload : root.value("payloads", json::array()))
     {
         if (payload.value("type", std::string()) != payloadType)
+            continue;
+
+        // Disambiguates multiple same-type+version payloads that target
+        // different MCUs within one multi-MCU device (e.g. KBP4's Central
+        // vs Peripheral firmware - see kbp4.json's payload notes). role=""
+        // (every existing caller, and every single-MCU family) only matches
+        // role-less payloads, so this is a no-op everywhere except families
+        // that actually tag a payload with a role.
+        if (payload.value("role", std::string()) != role)
             continue;
 
         const std::string pathValue = payload.value("path", std::string());
@@ -332,8 +354,16 @@ bool deviceDatabase::getPayloadPath(const std::string &payloadType, const versio
         // version (e.g. a legacy monolithic .syx and a newer chunked
         // repackaging of the identical firmware release), so still prefer
         // latest/default among them rather than just the first array match.
-        if (version != 0 && payload.value("version", std::string()) != requestedVersion)
-            continue;
+        // Compares parsed version_t structs, not raw strings - see
+        // isSupportedFirmwareVersion()'s comment for why a string compare is
+        // unreliable across differing component counts.
+        if (version != 0)
+        {
+            version_t payloadVersion;
+            const std::string payloadVersionStr = payload.value("version", std::string());
+            if (!parseVersionString(payloadVersionStr, payloadVersion) || !(payloadVersion == *version))
+                continue;
+        }
 
         if (firstMatch.empty())
             firstMatch = pathValue;

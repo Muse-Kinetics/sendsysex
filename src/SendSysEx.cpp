@@ -9,6 +9,7 @@
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -52,6 +53,12 @@ struct CliOptions
     unsigned int chunkDelayMs = DEFAULT_CHUNK_DELAY_MS;
     unsigned int pollSeconds = DEFAULT_POLL_SECONDS;
     unsigned int postDelayMs = 500U;
+    unsigned int firstGapDelayMs = 0U;
+    unsigned int firstChunkSize = 0U;
+    bool postDelayMsExplicit = false;
+    bool firstGapDelayMsExplicit = false;
+    bool firstChunkSizeExplicit = false;
+    bool chunkDelayMsExplicit = false;
     bool blEraseRebootCmd = false;
     int blPid = -1;
     std::string appPortName;
@@ -87,9 +94,15 @@ void printHelp()
         << "  -f <file>                  SysEx file to send directly to the selected raw port\n"
         << "\nAutomatic update mode:\n"
         << "  --fw-update <family>       Family name (case-insensitive, non-alphanumeric characters\n"
-        << "                             ignored). One of: 12Step, BopPad, K-Board, MalletStation,\n"
-        << "                             QuNeo, QuNexus, SoftStep\n"
+        << "                             ignored). One of: 12Step, BopPad, K-Board, KBP4,\n"
+        << "                             MalletStation, QuNeo, QuNexus, SoftStep\n"
         << "                             (--fw-update=<family> is also accepted)\n"
+        << "                             KBP4 sends Peripheral firmware (while still in application mode,\n"
+        << "                             relayed over I2C) then Central firmware (after rebooting into\n"
+        << "                             its bootloader), both with -fcs 32 -fgd 3000 -cd 150 -pd 3000\n"
+        << "                             applied automatically, regardless of --midi-backend (needed for\n"
+        << "                             a reliable transfer under both WinMM and WMS) - pass any of\n"
+        << "                             those flags explicitly to override.\n"
         << "  --fw-version <version>     Firmware version; omit to use the default from the family JSON\n"
         << "                             (--fw-version=<version> is also accepted)\n"
         << "  --id-request <family>      Connect, send an identity request, print the reply, then exit\n"
@@ -110,6 +123,20 @@ void printHelp()
         << "  -pd, --post-delay <ms>      Wait N ms after last chunk before closing port (default: 500)\n"
         << "                              Prevents F7 loss when the receiver NAKs the final packet.\n"
         << "                              Use 0 to disable.\n"
+        << "  -fcs, --first-chunk-size <bytes> Override the size of the very first sub-split window\n"
+        << "                              only (default: 0, disabled - uses -cs like every other\n"
+        << "                              window). Pairs with -fgd: a small first window that clears\n"
+        << "                              the host fast, then a larger -cs for the rest of the\n"
+        << "                              transfer once the receiver's settled.\n"
+        << "  -fgd, --first-gap-delay <ms> Override delay before the second sub-split window only\n"
+        << "                              (default: 0, disabled - uses -cd like every other gap).\n"
+        << "                              For devices whose receiver starts a blocking operation\n"
+        << "                              (e.g. a flash erase) as soon as it recognizes the message\n"
+        << "                              header in the first window, needing several seconds' grace\n"
+        << "                              before it can accept the next one. --fw-update kbp4 applies\n"
+        << "                              -fcs 32 -fgd 3000 -cd 150 -pd 3000 automatically (see above);\n"
+        << "                              for raw send (-p/-n -f) against KBP4, pass them explicitly,\n"
+        << "                              e.g. -fcs 32 -cs 512 -cd 150 -fgd 3000 -pd 3000.\n"
         << "\nGlobal options:\n"
         << "  --midi-backend <winmm|wms>  Windows only. Force a specific RtMidi backend instead of\n"
         << "                              auto-detecting. 'wms' fails immediately if the Windows MIDI\n"
@@ -136,6 +163,7 @@ void printHelp()
         << "  SendSysEx --fw-update kboard --fw-version 9.0.1 --app-port \"Mimic Hub MIDI Port 5\"\n"
         << "  SendSysEx --id-request QuNexus\n"
         << "  SendSysEx --fw-update BopPad --midi-backend winmm\n"
+        << "  SendSysEx --fw-update KBP4\n"
         << "  SendSysEx --send-bl-erase-reboot-cmd --pid <pid>\n\n"
         << "Bootloader commands:\n"
         << "  --send-bl-erase-reboot-cmd  Send a double-EOF erase+reboot command to a KMI bootloader.\n"
@@ -185,25 +213,68 @@ bool sendFileToPort(RtMidiOut &midiOut,
                     unsigned int chunkSize,
                     unsigned int chunkDelayMs,
                     unsigned int postDelayMs,
-                    std::string &errorMessage)
+                    std::string &errorMessage,
+                    unsigned int firstGapDelayMs,
+                    unsigned int firstChunkSize)
 {
     try
     {
         const std::string portName = midiOut.getPortName(static_cast<unsigned int>(portNumber));
-        std::cout << "Opening port: " << portNumber << "\n";
-        midiOut.openPort(static_cast<unsigned int>(portNumber));
 
         std::vector<unsigned char> bytes;
         if (!readBinaryFile(filePath, bytes, &errorMessage))
-        {
-            midiOut.closePort();
             return false;
-        }
 
         const std::vector<SysExChunk> chunks = findSysExChunks(bytes);
-        const bool sent = sendChunkedFileToPort(midiOut, portName, bytes, chunks,
-                                                chunkSize, chunkDelayMs, postDelayMs, errorMessage);
-        midiOut.closePort();
+
+        // Retry (close/reopen/resend-from-scratch on a failed send) now
+        // lives in chunkedSysExTransfer.h, shared with kmiDevice's
+        // --fw-update path - added 2026-08-12 after a real
+        // MidiOutWinMM::sendMessage failure mid-transfer with --midi-backend
+        // winmm forced on a machine actually running the WMS translation
+        // layer underneath it. Each attempt opens its own fresh RtMidiOut
+        // and re-resolves the port by exact name (not the original
+        // portNumber), since a retry may follow a device reboot that shifts
+        // port indices - the passed-in midiOut is only used above to resolve
+        // that name once, never opened directly.
+        std::unique_ptr<RtMidiOut> retryOut;
+        const bool sent = sendChunkedFileWithRetry(
+            portName, bytes, chunks, chunkSize, chunkDelayMs, postDelayMs,
+            [&]() -> RtMidiOut * {
+                try
+                {
+                    retryOut.reset(new RtMidiOut(midiBackend::selectedApi()));
+                    const unsigned int n = retryOut->getPortCount();
+                    for (unsigned int i = 0; i < n; ++i)
+                    {
+                        if (retryOut->getPortName(i) == portName)
+                        {
+                            std::cout << "Opening port: " << i << "\n";
+                            retryOut->openPort(i);
+                            return retryOut.get();
+                        }
+                    }
+                    errorMessage = "MIDI output port not found: " + portName;
+                }
+                catch (RtMidiError &error)
+                {
+                    errorMessage = error.getMessage();
+                }
+                catch (std::exception &error)
+                {
+                    errorMessage = error.what();
+                }
+                retryOut.reset();
+                return 0;
+            },
+            [&]() {
+                if (retryOut)
+                {
+                    try { retryOut->closePort(); } catch (...) {}
+                }
+            },
+            errorMessage, firstGapDelayMs, firstChunkSize);
+
         return sent;
     }
     catch (RtMidiError &error)
@@ -213,15 +284,6 @@ bool sendFileToPort(RtMidiOut &midiOut,
     catch (std::exception &error)
     {
         errorMessage = error.what();
-    }
-
-    try
-    {
-        if (midiOut.isPortOpen())
-            midiOut.closePort();
-    }
-    catch (...)
-    {
     }
 
     return false;
@@ -348,6 +410,41 @@ CliOptions parseArguments(int argc, const char *argv[])
                 options.parseError = "Invalid chunk delay.";
                 return options;
             }
+            options.chunkDelayMsExplicit = true;
+            continue;
+        }
+        if (arg == "-fcs" || arg == "--first-chunk-size")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --first-chunk-size.";
+                return options;
+            }
+
+            if (!parseUnsignedOption(argv[++i], options.firstChunkSize) || options.firstChunkSize > MAX_MIDI_SYSEX_SIZE)
+            {
+                options.parseError = "Invalid first chunk size. Use a value from 0 (disabled) to " + std::to_string(MAX_MIDI_SYSEX_SIZE) + " bytes.";
+                return options;
+            }
+            options.firstChunkSizeExplicit = true;
+            continue;
+        }
+        if (arg == "-fgd" || arg == "--first-gap-delay")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --first-gap-delay.";
+                return options;
+            }
+
+            if (!parseUnsignedOption(argv[++i], options.firstGapDelayMs))
+            {
+                options.parseError = "Invalid first-gap delay.";
+                return options;
+            }
+            options.firstGapDelayMsExplicit = true;
             continue;
         }
         if (arg == "-pd" || arg == "--post-delay")
@@ -364,6 +461,7 @@ CliOptions parseArguments(int argc, const char *argv[])
                 options.parseError = "Invalid post delay.";
                 return options;
             }
+            options.postDelayMsExplicit = true;
             continue;
         }
         if (arg == "--fw-update")
@@ -598,7 +696,29 @@ int runAutomaticProcess(const CliOptions &options)
         }
     }
 
-    if (!device.runAutomaticUpdate(options.chunkSize, options.chunkDelayMs, options.pollSeconds, options.postDelayMs))
+    // KBP4's Central bootloader/app-relay firmware path only accepts a
+    // reliable transfer with this specific shape - see kbp4.json's payload
+    // notes and k-board_pro_firmware's .buddy-project/commands.md
+    // (2026-08-15) for the hardware investigation. Applies regardless of
+    // --midi-backend (WinMM and WMS both take it), and CLI flags still win
+    // if the user explicitly passed them.
+    unsigned int firstChunkSize = options.firstChunkSize;
+    unsigned int firstGapDelayMs = options.firstGapDelayMs;
+    unsigned int postDelayMs = options.postDelayMs;
+    unsigned int chunkDelayMs = options.chunkDelayMs;
+    if (normalizeFamilyId(options.familyName) == "kbp4")
+    {
+        if (!options.firstChunkSizeExplicit)
+            firstChunkSize = 32U;
+        if (!options.firstGapDelayMsExplicit)
+            firstGapDelayMs = 3000U;
+        if (!options.postDelayMsExplicit)
+            postDelayMs = 3000U;
+        if (!options.chunkDelayMsExplicit)
+            chunkDelayMs = 150U;
+    }
+
+    if (!device.runAutomaticUpdate(options.chunkSize, chunkDelayMs, options.pollSeconds, postDelayMs, firstGapDelayMs, firstChunkSize))
     {
         std::cout << "ERROR: " << device.getLastError() << "\n";
         return 1;
@@ -728,7 +848,7 @@ int runManualProcess(const CliOptions &options)
         }
 
         std::string errorMessage;
-        if (!sendFileToPort(midiOut, portNumber, options.filePath, options.chunkSize, options.chunkDelayMs, options.postDelayMs, errorMessage))
+        if (!sendFileToPort(midiOut, portNumber, options.filePath, options.chunkSize, options.chunkDelayMs, options.postDelayMs, errorMessage, options.firstGapDelayMs, options.firstChunkSize))
         {
             std::cout << "ERROR: " << errorMessage << "\n";
             return 1;
@@ -746,6 +866,16 @@ int runManualProcess(const CliOptions &options)
 
 int main(int argc, const char *argv[])
 {
+    // stdout is fully buffered (not line-buffered) whenever it's not a live
+    // console - which includes every redirect-to-file invocation, so a
+    // killed/timed-out run leaves zero output behind even though it ran for
+    // minutes. unitbuf flushes after every operator<< instead, at some
+    // throughput cost that's irrelevant here (this is a low-rate CLI, not a
+    // tight logging loop). Added 2026-08-16 after a stuck --fw-update KBP4
+    // background run left an empty output file with no way to tell how far
+    // it got before it had to be force-killed.
+    std::cout.setf(std::ios_base::unitbuf);
+
     std::cout << "SendSysEx v" SENDSYSEX_VERSION "\n";
 
     const CliOptions options = parseArguments(argc, argv);
