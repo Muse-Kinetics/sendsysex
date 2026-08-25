@@ -70,6 +70,11 @@
         "applicationPidLsb": { "type": "array", "items": { "type": "integer" } },
         "bootloaderPidLsb": { "type": "array", "items": { "type": "integer" } },
         "stateDetection": { "type": "object" },
+        "versionEncoding": {
+          "type": "string",
+          "enum": ["standard", "bcd16"],
+          "description": "How to decode the bootloader/application version bytes in this family's identity reply. 'standard' (default when absent): each version is 3 bytes read straight as major/minor/patch. 'bcd16': legacy QuNeo-era layout - each version is only 2 bytes in the reply, [patch (LSB), (major<<4)|minor as BCD nibbles (MSB)], sent LSB-first, so the bootloader and app versions pack into 4 contiguous bytes instead of 6. A standard parse of that misaligns (the app's patch lands in bl_ver[2]) and BCD-misreads the MSB (e.g. QuNeo 1.2.31 -> '18.0.0'); see kmiDevice::midiCppIDReplyCallback."
+        },
         "notes": { "type": "array", "items": { "type": "string" } }
       }
     },
@@ -88,6 +93,8 @@
             "firstGapDelayMs": { "type": "integer", "minimum": 0, "description": "Milliseconds. Overrides -cd for the single gap following that first window only. 0/absent disables the override." },
             "chunkDelayMs": { "type": "integer", "minimum": 0, "description": "Milliseconds. Default -cd for every other gap in the transfer. Absent leaves the tool's normal -cd default (100)." },
             "postDelayMs": { "type": "integer", "minimum": 0, "description": "Milliseconds. Default -pd, the wait after the last chunk before closing the port. Absent leaves the tool's normal -pd default (500)." },
+            "rebootsToAppOnFinalChunk": { "type": "boolean", "description": "When true, the device reboots straight into application mode as it commits the final firmware chunk and never answers an identity request on the bootloader port afterwards. --fw-update skips the doomed final-chunk bootloader handshake and relies on its application-port reconnect + version check as the success test, avoiding ~9s of waiting for a reply that structurally cannot come. Absent/false keeps the historical behavior (wait postDelayMs for a final bootloader reply). Added 2026-08-26." },
+            "confirmByAppReconnectOnly": { "type": "boolean", "description": "When true, --fw-update confirms success by application-mode reconnect alone and skips the post-update version match. For families whose application firmware does not answer the standard Universal Device Inquiry (e.g. MalletStation / EM Pro Riser, which report version only via a proprietary OSC-over-SysEx message), an identity request in application mode never replies so a version match is impossible; reconnecting on the application port (detected by port name) is the success signal - a device still stuck in the bootloader shows its bootloader port instead. Absent/false keeps the strict version-match confirmation. Added 2026-08-26." },
             "notes": { "type": "array", "items": { "type": "string" } }
           }
         },

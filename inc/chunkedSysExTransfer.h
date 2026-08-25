@@ -126,10 +126,27 @@ inline bool waitForIdReply(RtMidiOut &midiOut, ChunkReplyState &state, unsigned 
     // configured budget. Measuring against steady_clock instead makes the
     // actual elapsed time match what was asked for, regardless of how long
     // any individual sendMessage() call takes.
+    //
+    // Regression fixed 2026-08-26 (SoftStep, CoreMIDI): drain() after the send,
+    // then sample 'start'. On CoreMIDI sendMessage() is asynchronous - it queues
+    // the request behind any still-in-flight data chunk and returns immediately,
+    // so the request can sit in CoreMIDI's queue for far longer than waitMs
+    // before it actually reaches the wire. Sampling 'start' right after the
+    // (async) send therefore starts the reply clock while the request is still
+    // queued: the whole budget can elapse before the request is even out, the
+    // device then replies within a few ms of it finally leaving (confirmed on
+    // the wire via MIDI Monitor), but we've already given up ("NO REPLY within
+    // 100 ms" on a chunk the board answered promptly). drain() blocks until the
+    // request is genuinely on the wire, so waitMs then measures a real reply
+    // window. On Windows drain() is a no-op (MidiOutWinMM/WMS inherit the base
+    // no-op), so this is a no-op there. (Per-resend blocking time inside the
+    // loop is still measured from 'start' - that accurate accounting is what
+    // prevents the long-budget balloon above, and is unchanged.)
+    midiOut.sendMessage(&idRequest);
+    midiOut.drain();
     const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point lastSend = start;
 
-    midiOut.sendMessage(&idRequest);
     while (!state.received)
     {
         const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -213,7 +230,8 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                                   unsigned int postDelayMs,
                                   std::string &errorMessage,
                                   unsigned int firstGapDelayMs = 0,
-                                  unsigned int firstChunkSize = 0)
+                                  unsigned int firstChunkSize = 0,
+                                  bool finalChunkRebootsToApp = false)
 {
     if (chunks.empty())
     {
@@ -337,6 +355,17 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
             // the application (chunk landed), so this check distinguishes
             // the two cases the same way it does mid-transfer.
             //
+            // Drain the just-sent data chunk onto the wire before doing
+            // anything time-based. CoreMIDI's sendMessage() is asynchronous, so
+            // without this the 50ms "settle" below would start while the chunk
+            // is still draining (overlapping the transmission instead of
+            // following it), and the id request would queue behind the chunk -
+            // the exact backlog that made replies land outside the reply window
+            // around chunk 6 on real SoftStep hardware. drain() bounds the queue
+            // to one chunk at a time and makes the settle a real post-receipt
+            // gap. No-op on Windows (WinMM/WMS inherit the base no-op drain()).
+            midiOut.drain();
+
             // Give the device a moment to finish receiving/start processing
             // the chunk before demanding a reply - firing the ID request
             // immediately risks it landing while the chunk's tail end is
@@ -375,6 +404,24 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
             // failure the JSON fix was supposed to prevent.
             const bool isFirstChunk = (i == 0);
             const bool isLastChunk = (i + 1 == chunks.size());
+
+            // Families whose device reboots straight into application mode as it
+            // commits the final chunk (softstep.json's rebootsToAppOnFinalChunk)
+            // never answer an identity request on the bootloader port afterwards
+            // - the port is already gone. Skip the doomed final-chunk handshake
+            // entirely and finish the send cleanly; runAutomaticUpdate then does
+            // the real success test on the application port (reconnect + version
+            // match). Waiting postDelayMs for a reply that structurally cannot
+            // come, then burning a whole retry cycle before the app-port
+            // confirmation, was pure latency (~9s on SoftStep). Non-final chunks
+            // are unaffected: a dropped mid-transfer chunk still aborts here.
+            if (isLastChunk && finalChunkRebootsToApp)
+            {
+                std::cout << "\n  final chunk sent; device reboots to application mode"
+                             " - confirming there\n";
+                continue;
+            }
+
             unsigned int replyWaitMs = chunkDelayMs;
             if (isFirstChunk)
                 replyWaitMs = std::max(replyWaitMs, firstGapDelayMs);
@@ -469,7 +516,8 @@ inline bool sendChunkedFileWithRetry(const std::string &portName,
                                      const std::function<void()> &closePort,
                                      std::string &errorMessage,
                                      unsigned int firstGapDelayMs = 0,
-                                     unsigned int firstChunkSize = 0)
+                                     unsigned int firstChunkSize = 0,
+                                     bool finalChunkRebootsToApp = false)
 {
     for (int attempt = 0; attempt < kChunkedSendRetryMaxAttempts; ++attempt)
     {
@@ -481,7 +529,7 @@ inline bool sendChunkedFileWithRetry(const std::string &portName,
 
         const bool sent = sendChunkedFileToPort(*midiOut, portName, bytes, chunks,
                                                 chunkSize, chunkDelayMs, postDelayMs, errorMessage,
-                                                firstGapDelayMs, firstChunkSize);
+                                                firstGapDelayMs, firstChunkSize, finalChunkRebootsToApp);
         closePort();
 
         if (sent)

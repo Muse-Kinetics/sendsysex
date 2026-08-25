@@ -352,7 +352,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize, getFirmwareUpdateDefaults().rebootsToAppOnFinalChunk))
             {
                 if (!isAmbiguousBootloaderPortLoss(lastError_))
                     return false;
@@ -410,7 +410,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize, getFirmwareUpdateDefaults().rebootsToAppOnFinalChunk))
             {
                 if (!isAmbiguousBootloaderPortLoss(lastError_))
                     return false;
@@ -476,6 +476,26 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // operator already ignores the dev/build component by design
             // (MIDI_device_metadata.hpp), so a direct comparison is exactly
             // the "does the running version match" check needed here.
+            // Exception (confirmByAppReconnectOnly): some families' application
+            // firmware doesn't answer the standard Universal Device Inquiry at
+            // all - e.g. MalletStation / EM Pro Riser (EM1 firmware) report
+            // version only via a proprietary OSC-over-SysEx "/fw/w/version"
+            // message, so an identity request in application mode never replies
+            // and applicationVersion stays 0.0.0. For those a version match is
+            // impossible; reconnecting on the application port (detected by port
+            // name in refreshPorts(), not by an id reply) is the confirmation -
+            // exactly what --fw-update used before the version-match check
+            // existed. A device still stuck in the bootloader would show its
+            // bootloader port here instead, so state_==connected already
+            // distinguishes success from failure for these families.
+            if (getFirmwareUpdateDefaults().confirmByAppReconnectOnly)
+            {
+                std::cout << "Confirmed application-mode reconnect (this family's application "
+                             "firmware does not answer a standard identity request, so no version "
+                             "match is performed).\n";
+                return true;
+            }
+
             if (identityMetadata_.applicationVersion != requestedFwVersion_)
             {
                 lastError_ = "Device reconnected in application mode, but its reported firmware version ("
@@ -1025,7 +1045,8 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
                                       const std::string &label,
                                       unsigned int postDelayMs,
                                       unsigned int firstGapDelayMs,
-                                      unsigned int firstChunkSize)
+                                      unsigned int firstChunkSize,
+                                      bool finalChunkRebootsToApp)
 {
     std::vector<unsigned char> bytes;
     if (!readBinaryFile(filePath, bytes, &lastError_))
@@ -1053,7 +1074,7 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
             return openTransferOutputByName(portName) ? transferOut_ : 0;
         },
         [this]() { closeTransferPort(); },
-        lastError_, firstGapDelayMs, firstChunkSize);
+        lastError_, firstGapDelayMs, firstChunkSize, finalChunkRebootsToApp);
 }
 
 void kmiDevice::processIncomingMessage(const std::vector<unsigned char> &message)
@@ -1130,14 +1151,38 @@ void kmiDevice::midiCppIDReplyCallback(void *userData, SYSEX_DEVICE_INQUIRY_REPL
     self->identityMetadata_.productIdMsb = reply->metadata.prod_id[1];
     self->identityMetadata_.familyId[0] = reply->metadata.family_id[0];
     self->identityMetadata_.familyId[1] = reply->metadata.family_id[1];
-    self->identityMetadata_.bootloaderVersion.major = reply->bl_ver[0];
-    self->identityMetadata_.bootloaderVersion.minor = reply->bl_ver[1];
-    self->identityMetadata_.bootloaderVersion.patch = reply->bl_ver[2];
-    self->identityMetadata_.bootloaderVersion.dev = 0;
-    self->identityMetadata_.applicationVersion.major = reply->app_ver[0];
-    self->identityMetadata_.applicationVersion.minor = reply->app_ver[1];
-    self->identityMetadata_.applicationVersion.patch = reply->app_ver[2];
-    self->identityMetadata_.applicationVersion.dev = 0;
+    if (self->database_.getVersionEncoding() == "bcd16")
+    {
+        // Legacy QuNeo-era identity reply (QuNeo_Firmware Q/Q_Main.c): each
+        // version is only TWO bytes, [patch (LSB), (major<<4)|minor BCD nibbles
+        // (MSB)], sent LSB-first - so the bootloader and app versions pack into
+        // 4 contiguous bytes where the standard reply carries 6 (bl_ver[3] +
+        // app_ver[3]). Straight-reading those 6 struct bytes misaligns: the
+        // app's own LSB (patch) lands in bl_ver[2] and only its MSB reaches
+        // app_ver[0], so a standard parse of QuNeo's 1.2.31 comes out "18.0.0"
+        // (0x12 read as decimal). Undo the packing here:
+        //   wire[0..3] = [bootLSB, bootMSB, appLSB, appMSB]
+        //             = [bl_ver[0], bl_ver[1], bl_ver[2], app_ver[0]]
+        self->identityMetadata_.bootloaderVersion.major = reply->bl_ver[1] >> 4;
+        self->identityMetadata_.bootloaderVersion.minor = reply->bl_ver[1] & 0x0F;
+        self->identityMetadata_.bootloaderVersion.patch = reply->bl_ver[0];
+        self->identityMetadata_.bootloaderVersion.dev = 0;
+        self->identityMetadata_.applicationVersion.major = reply->app_ver[0] >> 4;
+        self->identityMetadata_.applicationVersion.minor = reply->app_ver[0] & 0x0F;
+        self->identityMetadata_.applicationVersion.patch = reply->bl_ver[2];
+        self->identityMetadata_.applicationVersion.dev = 0;
+    }
+    else
+    {
+        self->identityMetadata_.bootloaderVersion.major = reply->bl_ver[0];
+        self->identityMetadata_.bootloaderVersion.minor = reply->bl_ver[1];
+        self->identityMetadata_.bootloaderVersion.patch = reply->bl_ver[2];
+        self->identityMetadata_.bootloaderVersion.dev = 0;
+        self->identityMetadata_.applicationVersion.major = reply->app_ver[0];
+        self->identityMetadata_.applicationVersion.minor = reply->app_ver[1];
+        self->identityMetadata_.applicationVersion.patch = reply->app_ver[2];
+        self->identityMetadata_.applicationVersion.dev = 0;
+    }
     self->identityMetadata_.bootloaderStateKnown = true;
     self->identityMetadata_.isBootloader = (self->identityMetadata_.productIdMsb == self->database_.getBootloaderPidMsb());
     self->pendingIdentityRequest_ = false;

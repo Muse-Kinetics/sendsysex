@@ -83,6 +83,7 @@ void deviceDatabase::clear()
     probeOnly_ = false;
     applicationPidMsb_ = 0;
     bootloaderPidMsb_ = 1;
+    versionEncoding_ = "standard";
     familyMarkers_.clear();
     safeProbeApplicationRoles_.clear();
     safeProbeBootloaderRoles_.clear();
@@ -126,6 +127,7 @@ bool deviceDatabase::loadFamily(const std::string &familyId)
     displayName_         = root.value("name", std::string());
     applicationPidMsb_  = root.at("identity").value("stateDetection", json::object()).value("applicationPidMsb", 0);
     bootloaderPidMsb_   = root.at("identity").value("stateDetection", json::object()).value("bootloaderPidMsb", 1);
+    versionEncoding_    = root.at("identity").value("versionEncoding", std::string("standard"));
 
     {
         const json &fwDefaults = root.value("transport", json::object()).value("firmwareUpdateDefaults", json::object());
@@ -133,6 +135,8 @@ bool deviceDatabase::loadFamily(const std::string &familyId)
         firmwareUpdateDefaults_.firstGapDelayMs = fwDefaults.value("firstGapDelayMs", 0U);
         firmwareUpdateDefaults_.chunkDelayMs    = fwDefaults.value("chunkDelayMs", 0U);
         firmwareUpdateDefaults_.postDelayMs     = fwDefaults.value("postDelayMs", 0U);
+        firmwareUpdateDefaults_.rebootsToAppOnFinalChunk = fwDefaults.value("rebootsToAppOnFinalChunk", false);
+        firmwareUpdateDefaults_.confirmByAppReconnectOnly = fwDefaults.value("confirmByAppReconnectOnly", false);
     }
 
     for (const auto &m : root.at("discovery").at("familyMarkers"))
@@ -775,6 +779,11 @@ int deviceDatabase::getApplicationPidMsb() const
 int deviceDatabase::getBootloaderPidMsb() const
 {
     return bootloaderPidMsb_;
+}
+
+const std::string &deviceDatabase::getVersionEncoding() const
+{
+    return versionEncoding_;
 }
 
 void deviceDatabase::addKnownPort(const std::string &portName, const std::string &role, bool bootloader)

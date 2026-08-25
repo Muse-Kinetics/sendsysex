@@ -21,6 +21,18 @@
       "bootloaderPidMsb": 1
     }
   },
+  "transport": {
+    "firmwareUpdateDefaults": {
+      "firstGapDelayMs": 5000,
+      "rebootsToAppOnFinalChunk": true,
+      "notes": [
+        "Real-hardware finding (2026-08-26, macOS): without these, --fw-update BopPad failed twice per run - 'NO REPLY within 100 ms' after chunk 1 on the first attempt (the retry then sailed through all 566 chunks), and 'NO REPLY within 500 ms' after the final chunk (566/566), before the app-port fallback confirmed the update landed. Same two device behaviors SoftStep has (see softstep.json).",
+        "firstGapDelayMs (5000): BopPad's bootloader erases its whole application region when it recognizes the first firmware packet, blocking USB service until that finishes - so chunk 1's reply can't come within the 100ms steady-state -cd. The first attempt times out on chunk 1 and only 'works' because that failed attempt already triggered the erase, so the retry finds it done. 5000ms lets the FIRST attempt wait the erase out and land on attempt 1. It's a return-early timeout (spent only if the reply is genuinely slow), so the generous value has no steady-state cost; confirm the real erase duration with --timestamp and tighten if desired.",
+        "rebootsToAppOnFinalChunk (true): BopPad reboots straight into application mode as it commits the final chunk, so it never answers an identity request on the bootloader port afterwards (the port is already gone). Skip the doomed final-chunk handshake and let runAutomaticUpdate's application-port reconnect + version check be the success test - avoids ~4s (postDelayMs timeout + 3s retry) of waiting for a reply that structurally cannot come. See softstep.json for the shared rationale.",
+        "chunkDelayMs/postDelayMs left at CLI defaults (100/500): chunks 2-565 reply fine at 100ms, and with rebootsToAppOnFinalChunk the final chunk no longer waits postDelayMs for a reply - postDelayMs is now just the brief settle after the last F7 before the port closes and we probe the app port."
+      ]
+    }
+  },
   "payloads": [
     {
       "id": "enter_bootloader",

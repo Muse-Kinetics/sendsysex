@@ -27,6 +27,22 @@ public:
         unsigned int firstGapDelayMs = 0;
         unsigned int chunkDelayMs = 0;
         unsigned int postDelayMs = 0;
+        // When true, the device reboots straight into application mode as it
+        // commits the final firmware chunk, so it never answers an identity
+        // request on the bootloader port afterwards. The chunked sender skips
+        // that doomed final-chunk handshake and lets runAutomaticUpdate's
+        // application-port reconnect + version check be the success test (see
+        // isAmbiguousBootloaderPortLoss). Default false = the historical
+        // behavior (wait postDelayMs for a final bootloader reply).
+        bool rebootsToAppOnFinalChunk = false;
+        // When true, confirm a successful update by application-mode reconnect
+        // alone, skipping the post-update version match. For families whose
+        // application firmware does not answer a standard Universal Device
+        // Inquiry (e.g. MalletStation / EM Pro Riser, which report version only
+        // via a proprietary OSC-over-SysEx message), a version match is
+        // impossible - see kmiDevice::runAutomaticUpdate. Default false keeps
+        // the strict version-match confirmation.
+        bool confirmByAppReconnectOnly = false;
     };
 
     deviceDatabase();
@@ -57,6 +73,13 @@ public:
 
     int getApplicationPidMsb() const;
     int getBootloaderPidMsb() const;
+
+    // Identity-reply version byte layout for this family. "standard" (default):
+    // each version is 3 bytes read straight as major/minor/patch. "bcd16":
+    // legacy QuNeo-era layout - each version is only 2 bytes in the reply,
+    // [patch(LSB), (major<<4)|minor (BCD nibbles, MSB)], so the two versions
+    // pack into 4 bytes total (see kmiDevice::midiCppIDReplyCallback).
+    const std::string &getVersionEncoding() const;
 
 private:
     struct KnownPort
@@ -98,6 +121,7 @@ private:
     bool probeOnly_;
     int applicationPidMsb_;
     int bootloaderPidMsb_;
+    std::string versionEncoding_;
     RtMidi::Api activeApi_;
     std::vector<std::string> familyMarkers_;
     std::vector<std::string> safeProbeApplicationRoles_;

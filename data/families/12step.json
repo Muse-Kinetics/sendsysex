@@ -21,6 +21,18 @@
       "bootloaderPidMsb": 1
     }
   },
+  "transport": {
+    "firmwareUpdateDefaults": {
+      "firstGapDelayMs": 5000,
+      "rebootsToAppOnFinalChunk": true,
+      "notes": [
+        "Applies the same two firmware-update settings its sibling KMI families need (see softstep.json / boppad.json / qunexus.json), for the MODERN chunked --fw-update path to a 12 Step that already has a bootloader - NOT the legacy pre-1.0.0 trojan-bootloader install.",
+        "firstGapDelayMs (5000): the bootloader erases its whole application region when it recognizes the first firmware packet, blocking USB until that finishes - so chunk 1's reply can't come within the 100ms steady-state -cd. Without this, the first send attempt times out on chunk 1 and only the retry (after the erase is already done) succeeds. 5000ms lets the FIRST attempt wait it out. It's a return-early timeout (spent only if the reply is genuinely slow), so the generous value has no steady-state cost; confirm the real erase duration with --timestamp and tighten if desired.",
+        "rebootsToAppOnFinalChunk (true): 12 Step reboots straight into application mode as it commits the final chunk, so it never answers an identity request on the bootloader port afterwards. Skip the doomed final-chunk handshake and let runAutomaticUpdate's application-port reconnect + version check be the success test.",
+        "chunkDelayMs/postDelayMs left at CLI defaults (100/500). Validated on real hardware 2026-08-26 (12 Step v1.0.9): single-pass update, zero 'NO REPLY'/retries, app-port version confirmed."
+      ]
+    }
+  },
   "payloads": [
     {
       "id": "enter_bootloader",

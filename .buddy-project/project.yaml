@@ -1,0 +1,20 @@
+name: SendSysEx CLI
+description: >-
+  Cross-platform C++11 command-line utility for sending MIDI SysEx and running
+  family-aware two-step bootloader firmware updates on KMI/Muse Kinetics
+  hardware. Device knowledge lives in data/families/*.json; MIT-licensed public
+  repo. Uses the KMI WMS fork of RtMidi (inc/rtmidi submodule).
+repository: git@github.com:Muse-Kinetics/sendsysex.git
+status: active
+phase: firmware-update reliability hardening (pre-release)
+owner: Eric Bateman <eric@musekinetics.com>
+responsible_buddy: SiliconDreams
+created: "2026-08-25"
+last_updated: "2026-08-25T17:10:00-07:00"
+peer_buddies: []
+tags:
+  - midi
+  - sysex
+  - firmware-update
+  - cli
+  - cpp11

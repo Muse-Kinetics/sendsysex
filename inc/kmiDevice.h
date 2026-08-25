@@ -103,7 +103,8 @@ private:
                                const std::string &label,
                                unsigned int postDelayMs = 500U,
                                unsigned int firstGapDelayMs = 0,
-                               unsigned int firstChunkSize = 0);
+                               unsigned int firstChunkSize = 0,
+                               bool finalChunkRebootsToApp = false);
     void processIncomingMessage(const std::vector<unsigned char> &message);
     void handleIdentityStateUpdate();
     void clearIdentityMetadata();

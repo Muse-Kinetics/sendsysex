@@ -19,6 +19,24 @@
     "stateDetection": {
       "applicationPidMsb": 0,
       "bootloaderPidMsb": 1
+    },
+    "versionEncoding": "bcd16",
+    "notes": [
+      "versionEncoding bcd16 (2026-08-26): QuNeo's identity reply (QuNeo_Firmware Q/Q_Main.c:647-650) sends each version as only TWO bytes - firmwareVersion.c[LSB] then c[MSB], with the MSB nibble-packed as (major<<4)|minor and the LSB the patch. Q/Q_fwupdate_dem.h defines FIRMWARE_VER_MSB 0x12 (=1.2) and FIRMWARE_VER_LSB 31, i.e. version 1.2.31. The standard 3-bytes-per-version parse misaligns this 4-byte-total layout and BCD-misreads 0x12 as decimal 18, so a healthy QuNeo reported as '18.0.0' and failed --fw-update's post-update version-match even though the flash succeeded. bcd16 tells kmiDevice::midiCppIDReplyCallback to unpack it correctly -> 1.2.31."
+    ]
+  },
+  "transport": {
+    "firmwareUpdateDefaults": {
+      "firstGapDelayMs": 5000,
+      "chunkDelayMs": 700,
+      "rebootsToAppOnFinalChunk": true,
+      "notes": [
+        "Applies the same two firmware-update settings its sibling KMI families need (see softstep.json / boppad.json / qunexus.json), PLUS a raised chunkDelayMs.",
+        "chunkDelayMs (700, vs the 100ms default): QuNeo's Hex_to_SysEx packaging produces MANY small chunks (1164 of 38-126 bytes) and its per-chunk identity round-trip is not merely slow but OCCASIONALLY DROPPED - real hardware failed at random mid-transfer chunks at both 100ms (chunks 3/293/37) and 300ms (44/165/23), the signature of a lost request or reply rather than a consistent latency. waitForIdReply already re-sends the identity request every resendIntervalMs (300ms) within the budget to ride out exactly that, but the budget has to EXCEED 300ms for any resend to fire - at 300ms it expired before the first resend. 700ms allows two resends (t=0, 300, 600), so a single dropped round-trip no longer aborts the transfer. Return-early timeout, so a healthy chunk still proceeds immediately; the budget is only spent on a genuine drop.",
+        "firstGapDelayMs (5000): the bootloader erases its whole application region when it recognizes the first firmware packet, blocking USB until that finishes - so chunk 1's reply can't come within the 100ms steady-state -cd. Without this, the first send attempt times out on chunk 1 and only the retry (after the erase is already done) succeeds. 5000ms lets the FIRST attempt wait it out. It's a return-early timeout (spent only if the reply is genuinely slow), so the generous value has no steady-state cost; confirm the real erase duration with --timestamp and tighten if desired.",
+        "rebootsToAppOnFinalChunk (true): QuNeo reboots straight into application mode as it commits the final chunk, so it never answers an identity request on the bootloader port afterwards. Skip the doomed final-chunk handshake and let runAutomaticUpdate's application-port reconnect + version check be the success test.",
+        "chunkDelayMs/postDelayMs left at CLI defaults (100/500). Validated on real hardware 2026-08-26."
+      ]
     }
   },
   "payloads": [
