@@ -7,10 +7,13 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
 #include <vector>
 
@@ -20,6 +23,9 @@
 #include "midiBackend.h"
 #include "sysExChunking.h"
 #include "chunkedSysExTransfer.h"
+#include "bootloaderUpgrade.h"
+#include "bootloaderSend.h"
+#include "coreMidiSend.h"
 #include "version.h"
 
 namespace
@@ -64,6 +70,32 @@ struct CliOptions
     std::string appPortName;
     std::string bootloaderPortName;
     std::string midiBackendOverride;
+
+    // Legacy "bootloader trojan horse" sector-wise install (see
+    // bootloaderUpgrade.h / bootloaderSend.h). --bl-decode is offline (manifest
+    // only); --bl-send streams the image to -p/-n one sector at a time.
+    bool blDecodeOnly = false;
+    bool blSend = false;
+    bool blStep = false;
+    bool blDryRun = false;
+    double blPaddingScale = 1.0; // fraction of the file's inter-packet padding to keep (1=byte-exact, 0=strip)
+    unsigned int blBlockToDataGapMs = 40U;
+    unsigned int blSectorGapMs = 40U;
+    unsigned int blFirstBlockToDataGapMs = 0U;
+    unsigned int blBankTransitionMs = 3000U;
+    bool blBankProbe = false;
+    unsigned int blPreProbeDelayMs = 250U;
+    unsigned int blBankProbeTimeoutMs = 12000U;
+    bool blProbeFirst = false;       // --probe: version request before sending, abort if silent
+    bool blProbeOnly = false;        // --probe-only: probe and report, send no firmware
+    unsigned int blProbeTimeoutMs = 4000U; // v93 reply takes ~1.3s (8051 CRC compute); allow margin
+    bool blVerify = false;           // --verify: after send, id-request the rebooted device, confirm bootloader
+    unsigned int blVerifySettleMs = 6000U; // wait before the first id request: ~5s to install bl + reboot
+    unsigned int blVerifyTimeoutS = 15U; // how long to keep retrying the id request after the settle
+    bool bootloaderInstall = false;  // --bootloader-install <family>: guided end-to-end trojan install
+    std::string blOutDir;            // --out-dir: where the session log + captured image go
+    bool blCoreMidi = false;
+    int blSpeedBytesPerSec = 3125; // --coremidi: force kMIDIPropertyMaxSysExSpeed (1x MIDI). 0 = leave endpoint default.
 };
 
 
@@ -84,6 +116,8 @@ void printHelp()
         << "  SendSysEx --fw-update <family> [--fw-version <version>] [-t <seconds>] [-cs <bytes>] [-cd <ms>] [-pd <ms>]\n"
         << "  SendSysEx --id-request <family> [-t <seconds>]\n"
         << "  SendSysEx --send-bl-erase-reboot-cmd --pid <pid> -p <num>|-n <name>\n"
+        << "  SendSysEx --bl-decode -f <legacy.syx>\n"
+        << "  SendSysEx --bl-send -f <legacy.syx> -p <num>|-n <name> [--step] [--bank-probe] [gaps...]\n"
         << "  Any command above also accepts --midi-backend <winmm|wms> (Windows only).\n"
         << "\nRaw send mode:\n"
         << "  -l                         List all raw RtMidi input and output ports\n"
@@ -108,6 +142,14 @@ void printHelp()
         << "                             into its bootloader).\n"
         << "  --fw-version <version>     Firmware version; omit to use the default from the family JSON\n"
         << "                             (--fw-version=<version> is also accepted)\n"
+        << "  --bootloader-install <family> Guided end-to-end legacy bootloader (trojan) install: detects\n"
+        << "                             the pre-bootloader unit, shows a risk warning + consent prompt,\n"
+        << "                             validates the connection (5 version requests) and a firmware\n"
+        << "                             dump, installs the bootloader with --verify, then offers to load\n"
+        << "                             the latest firmware. Logs the whole session + captured image to\n"
+        << "                             --out-dir. macOS + SoftStep only for now.\n"
+        << "  --out-dir <path>           Directory for --bootloader-install's session log + captured\n"
+        << "                             image (default: ./bootloader-install-<family>-<timestamp>).\n"
         << "  --id-request <family>      Connect, send an identity request, print the reply, then exit\n"
         << "  -t <seconds>               Poll interval while waiting for the device to appear or reboot\n"
         << "  --app-port <name>          Exact MIDI port name to use, bypassing family-marker port\n"
@@ -141,6 +183,82 @@ void printHelp()
         << "                              JSON defines one (see above; only KBP4 does today); for raw\n"
         << "                              send (-p/-n -f), always pass them explicitly, e.g. against\n"
         << "                              KBP4: -fcs 32 -cs 512 -cd 150 -fgd 3000 -pd 3000.\n"
+        << "\nLegacy \"bootloader trojan horse\" install (pre-1.0.0 SoftStep / 12 Step):\n"
+        << "  These units shipped with NO bootloader; a captured monolithic firmware image installs\n"
+        << "  one in-place. Unlike modern chunked .syx, the image is ONE F0...F7 of many KMI packets\n"
+        << "  (2 banks of FW_HEADER + [FW_BLOCK_HEADER,FW_DATA] 512-byte sectors) and MUST be sent as\n"
+        << "  a single message - the receiver resets its stage flag on every F0. WARNING: the update\n"
+        << "  erases the reset vector mid-flight; a failure can brick the unit (recoverable only over\n"
+        << "  SiLabs USB/JTAG). Send only to a unit you can re-flash.\n"
+        << "  --bl-decode                 Decode a legacy image and print its bank/sector manifest\n"
+        << "                              (offline; opens no port). Use to inspect/verify CRCs.\n"
+        << "  --bl-send                   Stream a legacy image (-f) to -p/-n one sector at a time\n"
+        << "                              inside a single F0...F7, with the timing below.\n"
+        << "  --family <name>             With --bl-send, auto-select the family's control-surface\n"
+        << "                              output port instead of -p/-n. Handles legacy SoftStep's\n"
+        << "                              unnamed ports (product \"SSCOM\", enumerating as port 1 =\n"
+        << "                              control surface / port 2 = expander). E.g. --family SoftStep.\n"
+        << "  --step                      Interactive: pause at each sector (Enter=next, N=send N,\n"
+        << "                              a=auto-run rest, q=quit) to watch the device sector by sector.\n"
+        << "  --probe                     Before sending any firmware, send a firmware-version request\n"
+        << "                              (the KMI REQUEST_FW_VERSION the editor uses; the legacy app\n"
+        << "                              has no Universal Device Inquiry) and require a reply - aborts\n"
+        << "                              the send if the device is silent. Listens on ALL input ports\n"
+        << "                              and matches the device's manufacturer signature. Note the v93\n"
+        << "                              reply arrives ~1.35s after the request (it computes the app CRC\n"
+        << "                              first), so keep --probe-timeout well above that.\n"
+        << "  --probe-only                Probe as with --probe, print the result, and STOP - send no\n"
+        << "                              firmware. A safe connectivity/version poll (harmless query).\n"
+        << "  --verify                    After the send, wait for the device to reboot and re-enumerate,\n"
+        << "                              then run the standard id request and confirm it came up in\n"
+        << "                              bootloader mode (the successful-install signal). Family is\n"
+        << "                              auto-detected from the image (SoftStep/12 Step) or --family.\n"
+        << "                              Exit code reflects the verification result.\n"
+        << "  --verify-settle <ms>        Wait before the first verify id request (default: 6000). The\n"
+        << "                              trojan takes ~5s to install the bootloader and reboot; querying\n"
+        << "                              earlier just misses the still-rebooting device.\n"
+        << "  --verify-timeout <s>        Seconds to keep retrying the id request after the settle\n"
+        << "                              (default: 15).\n"
+        << "  --probe-timeout <ms>        How long to wait for the pre-send probe reply (default: 4000).\n"
+        << "                              The v93 reply takes ~1.3s (it computes the app CRC first), so\n"
+        << "                              do not set this below ~2000.\n"
+        << "  --block-data-gap <ms>       Gap after each FW_BLOCK_HEADER, before its FW_DATA - the\n"
+        << "                              sector's flash-erase time (default: 40).\n"
+        << "  --first-block-data-gap <ms> Override --block-data-gap for the very first sector only\n"
+        << "                              (default: 0 = use --block-data-gap).\n"
+        << "  --sector-gap <ms>           Gap after each FW_DATA, write/settle time (default: 40).\n"
+        << "  --bank-gap <ms>             Blind wait at the bank 0->1 transition (default: 3000).\n"
+        << "                              Superseded by --bank-probe when that is set.\n"
+        << "  --bank-probe                At the bank transition, wait --pre-probe-delay, then send a\n"
+        << "                              REQUEST_FW_VERSION packet (inside the open message) and wait\n"
+        << "                              for the device's reply before bank 1 - confirms the staged\n"
+        << "                              firmware rebooted (the only reliable stage 1->2 sync).\n"
+        << "                              Requires the matching MIDI input port.\n"
+        << "  --pre-probe-delay <ms>      Wait after bank 0's last sector BEFORE the first probe, to\n"
+        << "                              let the staged firmware finish its reboot/re-init deaf\n"
+        << "                              window (default: 250).\n"
+        << "  --bank-probe-timeout <ms>   Total budget to get a probe reply before aborting (default:\n"
+        << "                              12000). The request is resent periodically while waiting.\n"
+        << "  --padding-scale <0..1>      Fraction of the image's baked-in inter-packet padding to keep\n"
+        << "                              (default 1.0 = keep all, so the wire bytes are identical to the\n"
+        << "                              source file - the proven-safe stream - with gaps added on top).\n"
+        << "                              0.5 keeps half of each packet's padding; 0.0 keeps none. Use to\n"
+        << "                              experiment with how much padding the gaps can replace.\n"
+        << "  --strip-padding             Alias for --padding-scale 0. Drops ~19.7 KB of padding, which\n"
+        << "                              on real hardware misframes and reboots the unit - experiment only.\n"
+        << "  --dry-run                   Print the send schedule without opening a port or sending.\n"
+        << "  --coremidi                  macOS only. Send the WHOLE image (padding intact) as one\n"
+        << "                              SysEx via CoreMIDI's flow-controlled MIDISendSysex(), instead\n"
+        << "                              of RtMidi's MIDISend (which bursts each buffer at full USB\n"
+        << "                              speed and bricks these fragile units). Ignores --step/gaps/\n"
+        << "                              --bank-probe. Recommended path on macOS. E.g.:\n"
+        << "                              --bl-send --coremidi --family SoftStep -f <legacy.syx>\n"
+        << "  --speed <bytes/sec>         With --coremidi, force kMIDIPropertyMaxSysExSpeed on the\n"
+        << "                              destination (default 3125 = 1x MIDI, SysEx Librarian's 100%).\n"
+        << "                              MIDISendSysex paces to this; a USB-MIDI driver advertising a\n"
+        << "                              higher rate would otherwise overrun a fragile device. 0 =\n"
+        << "                              leave the endpoint's advertised speed untouched.\n"
+        << "  (-pd/--post-delay also applies to the non-coremidi path: wait after the final F7.)\n"
         << "\nGlobal options:\n"
         << "  --midi-backend <winmm|wms>  Windows only. Force a specific RtMidi backend instead of\n"
         << "                              auto-detecting. 'wms' fails immediately if the Windows MIDI\n"
@@ -481,6 +599,28 @@ CliOptions parseArguments(int argc, const char *argv[])
             options.familyName = argv[++i];
             continue;
         }
+        if (arg == "--bootloader-install")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing family for --bootloader-install.";
+                return options;
+            }
+            options.bootloaderInstall = true;
+            options.familyName = argv[++i];
+            continue;
+        }
+        if (arg == "--out-dir")
+        {
+            if (i + 1 >= argc)
+            {
+                options.parseError = "Missing value for --out-dir.";
+                return options;
+            }
+            options.blOutDir = argv[++i];
+            continue;
+        }
         if (arg == "--id-request")
         {
             if (i + 1 >= argc)
@@ -587,6 +727,177 @@ CliOptions parseArguments(int argc, const char *argv[])
             options.midiBackendOverride = argv[++i];
             continue;
         }
+        if (arg == "--bl-decode")
+        {
+            options.blDecodeOnly = true;
+            continue;
+        }
+        if (arg == "--bl-send")
+        {
+            options.blSend = true;
+            continue;
+        }
+        if (arg == "--step")
+        {
+            options.blStep = true;
+            continue;
+        }
+        if (arg == "--dry-run")
+        {
+            options.blDryRun = true;
+            continue;
+        }
+        if (arg == "--strip-padding")
+        {
+            options.blPaddingScale = 0.0; // alias for --padding-scale 0
+            continue;
+        }
+        if (arg == "--padding-scale")
+        {
+            if (i + 1 >= argc)
+            {
+                options.parseError = "Missing value for --padding-scale.";
+                return options;
+            }
+            char *end = 0;
+            const double v = std::strtod(argv[++i], &end);
+            if (!end || *end != '\0' || v < 0.0 || v > 1.0)
+            {
+                options.parseError = "Invalid --padding-scale (use a fraction from 0.0 to 1.0).";
+                return options;
+            }
+            options.blPaddingScale = v;
+            continue;
+        }
+        if (arg == "--block-data-gap")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blBlockToDataGapMs))
+            {
+                options.parseError = "Invalid or missing value for --block-data-gap.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--first-block-data-gap")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blFirstBlockToDataGapMs))
+            {
+                options.parseError = "Invalid or missing value for --first-block-data-gap.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--sector-gap")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blSectorGapMs))
+            {
+                options.parseError = "Invalid or missing value for --sector-gap.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--bank-gap")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blBankTransitionMs))
+            {
+                options.parseError = "Invalid or missing value for --bank-gap.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--bank-probe")
+        {
+            options.blBankProbe = true;
+            continue;
+        }
+        if (arg == "--probe")
+        {
+            options.blProbeFirst = true;
+            continue;
+        }
+        if (arg == "--probe-only")
+        {
+            options.blProbeFirst = true;
+            options.blProbeOnly = true;
+            continue;
+        }
+        if (arg == "--verify")
+        {
+            options.blVerify = true;
+            continue;
+        }
+        if (arg == "--verify-timeout")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blVerifyTimeoutS))
+            {
+                options.parseError = "Invalid or missing value for --verify-timeout.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--verify-settle")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blVerifySettleMs))
+            {
+                options.parseError = "Invalid or missing value for --verify-settle.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--probe-timeout")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blProbeTimeoutMs))
+            {
+                options.parseError = "Invalid or missing value for --probe-timeout.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--pre-probe-delay")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blPreProbeDelayMs))
+            {
+                options.parseError = "Invalid or missing value for --pre-probe-delay.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--bank-probe-timeout")
+        {
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], options.blBankProbeTimeoutMs))
+            {
+                options.parseError = "Invalid or missing value for --bank-probe-timeout.";
+                return options;
+            }
+            continue;
+        }
+        if (arg == "--family")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --family.";
+                return options;
+            }
+            options.familyName = argv[++i];
+            continue;
+        }
+        if (arg == "--coremidi")
+        {
+            options.blCoreMidi = true;
+            continue;
+        }
+        if (arg == "--speed")
+        {
+            unsigned int spd = 0;
+            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], spd))
+            {
+                options.parseError = "Invalid or missing value for --speed (bytes/sec, 0 = leave endpoint default).";
+                return options;
+            }
+            options.blSpeedBytesPerSec = static_cast<int>(spd);
+            continue;
+        }
 
         options.showHelp = true;
         options.parseError = "Unrecognized argument: " + arg;
@@ -594,6 +905,95 @@ CliOptions parseArguments(int argc, const char *argv[])
     }
 
     return options;
+}
+
+// Legacy (pre-bootloader) firmware-version query for SoftStep / 12 Step. These
+// units do NOT answer the standard KMI/Universal id request - only the device-
+// specific REQUEST_FW_VERSION the editor uses (KMI_SysexMessages.c _fw_req_*).
+// Request bytes are verbatim: F0 + KMI header + 50 zero pad + REQUEST_FW_VERSION
+// packet + F7. The reply is a FW_HEADER; its ASCII version digits are < 0x80 so
+// they survive 7-bit encoding and can be read straight from the raw reply.
+struct LegacyReplyState
+{
+    volatile bool matched;
+    std::vector<unsigned char> sig;   // manufacturer signature to match (e.g. 1B 48 7A 01)
+    std::vector<unsigned char> reply; // captured bytes of the matching message
+    LegacyReplyState() : matched(false) {}
+};
+
+static void legacyReplyCallback(double, std::vector<unsigned char> *msg, void *user)
+{
+    LegacyReplyState *s = static_cast<LegacyReplyState *>(user);
+    if (s->matched || msg == 0 || msg->size() < s->sig.size())
+        return;
+    for (std::size_t i = 0; i + s->sig.size() <= msg->size(); ++i)
+    {
+        bool ok = true;
+        for (std::size_t j = 0; j < s->sig.size(); ++j)
+            if ((*msg)[i + j] != s->sig[j]) { ok = false; break; }
+        if (ok) { s->reply = *msg; s->matched = true; return; }
+    }
+}
+
+// Returns true and fills versionOut ("93", etc.) if a legacy unit answers.
+static bool runLegacyVersionQuery(const std::string &familyId, std::string &versionOut)
+{
+    std::vector<unsigned char> req, sig, outMarker;
+    if (familyId == "softstep")
+    {
+        req = {0xF0,0x00,0x1B,0x48,0x7A,0x01,0x00};
+        sig = {0x1B,0x48,0x7A,0x01};
+    }
+    else if (familyId == "12step")
+    {
+        req = {0xF0,0x00,0x01,0x55,0x7A,0x14,0x00};
+        sig = {0x00,0x01,0x55,0x7A,0x14};
+    }
+    else
+        return false;
+    req.resize(req.size() + 50, 0x00); // 50-zero pad
+    const unsigned char pkt[] = {0x01,0x00,0x00,0x00,0x00,0x04,0x40,0x00,0x30};
+    req.insert(req.end(), pkt, pkt + sizeof(pkt));
+    req.push_back(0xF7);
+
+    // Find an output port to send to (any port carrying the family marker) and
+    // open every input to catch the reply wherever it lands.
+    RtMidiOut out(midiBackend::selectedApi());
+    int outIdx = -1;
+    const std::string marker = (familyId == "softstep") ? "SSCOM" : "12";
+    for (unsigned int i = 0; i < out.getPortCount(); ++i)
+        if (out.getPortName(i).find(marker) != std::string::npos) { outIdx = static_cast<int>(i); break; }
+    if (outIdx < 0)
+        return false;
+    out.openPort(static_cast<unsigned int>(outIdx));
+
+    LegacyReplyState state;
+    state.sig = sig;
+    std::vector<RtMidiIn *> ins;
+    RtMidiIn probe(midiBackend::selectedApi());
+    for (unsigned int i = 0; i < probe.getPortCount(); ++i)
+    {
+        RtMidiIn *in = 0;
+        try { in = new RtMidiIn(midiBackend::selectedApi()); in->ignoreTypes(false,false,false);
+              in->openPort(i); in->setCallback(legacyReplyCallback, &state); ins.push_back(in); }
+        catch (...) { delete in; }
+    }
+
+    std::vector<unsigned char> msg(req.begin(), req.end());
+    out.sendMessage(&msg);
+    for (int waited = 0; waited < 3000 && !state.matched; waited += 5)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    for (std::size_t i = 0; i < ins.size(); ++i) { try { ins[i]->closePort(); } catch (...) {} delete ins[i]; }
+
+    if (!state.matched)
+        return false;
+    // Scan the reply for two consecutive ASCII digits = the version string.
+    for (std::size_t i = 0; i + 1 < state.reply.size(); ++i)
+        if (state.reply[i] >= 0x30 && state.reply[i] <= 0x39 &&
+            state.reply[i + 1] >= 0x30 && state.reply[i + 1] <= 0x39)
+        { versionOut = std::string(1, (char)state.reply[i]) + (char)state.reply[i + 1]; break; }
+    return true;
 }
 
 int runIdentityRequest(const CliOptions &options)
@@ -627,29 +1027,39 @@ int runIdentityRequest(const CliOptions &options)
         std::cout << "Waiting " << options.pollSeconds << " second(s) for " << options.familyName << " to connect...\n";
     }
 
-    if (device.getState() == kmiDevice::State::disconnected)
-    {
-        std::cout << "ERROR: " << (device.getLastError().empty() ? "Device not found." : device.getLastError()) << "\n";
-        return 1;
-    }
-
     // refreshPorts already sends the identity request and waits up to 500 ms.
     // If the reply has not arrived yet (slow device), poll a bit longer.
-    if (!device.hasReceivedIdentity())
+    if (device.getState() != kmiDevice::State::disconnected && !device.hasReceivedIdentity())
     {
         std::cout << "Waiting for identity reply...\n";
         for (int i = 0; i < 40 && !device.hasReceivedIdentity(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    if (!device.hasReceivedIdentity())
+    if (device.hasReceivedIdentity())
     {
-        std::cout << "No identity reply received within the timeout.\n";
-        return 1;
+        device.printIdentityMetadata();
+        return 0;
     }
 
-    device.printIdentityMetadata();
-    return 0;
+    // No modern reply: the device may be a pre-bootloader legacy unit (SoftStep
+    // SSCOM / old 12 Step) that only answers the device-specific REQUEST_FW_VERSION.
+    // Try that before giving up - this is the "correct message for the ports we see".
+    std::string legacyVer;
+    if (runLegacyVersionQuery(normalizeFamilyId(options.familyName), legacyVer))
+    {
+        std::cout << "Legacy (pre-bootloader) " << options.familyName << " firmware detected"
+                  << (legacyVer.empty() ? "" : (" - version " + legacyVer)) << ".\n"
+                  << "  Answers REQUEST_FW_VERSION, not the standard id request; no bootloader installed"
+                     " (a trojan bl-send target).\n";
+        return 0;
+    }
+
+    if (device.getState() == kmiDevice::State::disconnected)
+        std::cout << "ERROR: " << (device.getLastError().empty() ? "Device not found." : device.getLastError()) << "\n";
+    else
+        std::cout << "No identity reply received within the timeout.\n";
+    return 1;
 }
 
 int runAutomaticProcess(const CliOptions &options)
@@ -805,6 +1215,616 @@ int runBlEraseRebootCmd(const CliOptions &options)
     return 0;
 }
 
+// Decode a legacy "bootloader trojan horse" .syx and print its sector
+// manifest. Offline - opens no MIDI port.
+int runBlDecode(const CliOptions &options)
+{
+    if (options.filePath.empty())
+    {
+        std::cout << "ERROR: --bl-decode requires -f <file.syx>.\n";
+        return 1;
+    }
+    std::vector<unsigned char> bytes;
+    std::string readError;
+    if (!readBinaryFile(options.filePath, bytes, &readError))
+    {
+        std::cout << "ERROR: " << readError << "\n";
+        return 1;
+    }
+    const blupgrade::LegacyFirmwareImage img =
+        blupgrade::decodeLegacyFirmwareSyx(std::vector<uint8_t>(bytes.begin(), bytes.end()));
+    blupgrade::printLegacyImageManifest(img);
+    return (img.ok && img.allCrcOk()) ? 0 : 1;
+}
+
+// Resolve the family's application "control surface" output port by name
+// normalization only - no identity handshake, so it works on a legacy v93
+// unit that doesn't answer modern identity requests. Legacy SoftStep units
+// enumerate as the bare product string "SSCOM" with two UNNAMED jacks
+// (iJack=0 in the v93 USB descriptor), which the OS numbers as port 1
+// (control surface) / port 2 (expander); the softstep.json
+// legacy_sscom_application profile models exactly that, and chooseBestPort()
+// picks the control_surface role (safeProbeRoles.application order:
+// control_surface, main, port1). Returns false (and fills err) if the family
+// JSON is missing or no matching port is visible.
+bool resolveFamilyControlSurfacePort(const std::string &family, RtMidiOut &midiOut,
+                                     std::string &portNameOut, std::string &err)
+{
+    deviceDatabase db;
+    if (!db.loadFamily(family))
+    {
+        err = db.getLastError();
+        return false;
+    }
+    db.setActiveApi(midiOut.getCurrentApi());
+
+    std::vector<std::string> matched;
+    const unsigned int n = midiOut.getPortCount();
+    for (unsigned int i = 0; i < n; ++i)
+    {
+        const std::string name = midiOut.getPortName(i);
+        if (db.matchesFamily(name))
+            matched.push_back(name);
+    }
+    if (matched.empty())
+    {
+        err = "No visible MIDI output port matched family \"" + family + "\".";
+        return false;
+    }
+    const std::string best = db.chooseBestPort(matched, false /* application state */);
+    if (best.empty())
+    {
+        err = "Found family ports but none resolved to a control-surface/main role.";
+        return false;
+    }
+    portNameOut = best;
+    return true;
+}
+
+// Stream a legacy image to -p/-n (or an auto-resolved --family port) one sector
+// at a time inside a single F0..F7, with operator-controlled timing (--step or
+// timed gaps). See bootloaderSend.h.
+// Identify the family from a decoded legacy image's outer header manufacturer
+// bytes (F0 00 mfg2 mfg3 mfg4 ...): SoftStep = 1B 48 7A, 12 Step = 01 55 7A. Used
+// so --verify can find the rebooted device without an explicit --family.
+static std::string familyFromImage(const blupgrade::LegacyFirmwareImage &img)
+{
+    if (img.outerHeaderWire.size() >= 5)
+    {
+        const uint8_t a = img.outerHeaderWire[2], b = img.outerHeaderWire[3], c = img.outerHeaderWire[4];
+        if (a == 0x1B && b == 0x48 && c == 0x7A) return "SoftStep";
+        if (a == 0x01 && b == 0x55 && c == 0x7A) return "12Step";
+    }
+    return "";
+}
+
+// After a --bl-send trojan install the device stages the bootloader and reboots -
+// ~5s on real hardware - re-enumerating as its bootloader port. We therefore wait
+// settleMs BEFORE the first id request (querying mid-reboot just misses), then
+// retry: each attempt uses a fresh kmiDevice so refreshPorts() re-sends the
+// inquiry (kmiDevice won't resend on one instance once a request is pending).
+// Success = a reply in bootloader state (reply PID MSB flipped; see softstep.json
+// stateDetection.bootloaderPidMsb). Returns 0 on a confirmed bootloader, else 1.
+static int verifyInstallViaIdRequest(const std::string &familyName,
+                                     unsigned int settleMs, unsigned int timeoutS)
+{
+    std::cout << "\nVerifying install: waiting " << (settleMs / 1000.0)
+              << "s for the device to install the bootloader and reboot ...\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(settleMs));
+
+    unsigned int waited = 0;
+    const unsigned int attemptGapMs = 500;
+    bool responded = false;
+    kmiDevice::State state = kmiDevice::State::disconnected;
+    while (waited < timeoutS * 1000)
+    {
+        kmiDevice device(familyName); // fresh -> refreshPorts() sends a new inquiry
+        if (device.refreshPorts() && device.getState() != kmiDevice::State::disconnected)
+        {
+            for (int i = 0; i < 16 && !device.hasReceivedIdentity(); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (device.hasReceivedIdentity())
+            {
+                device.printIdentityMetadata();
+                responded = true;
+                state = device.getState();
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(attemptGapMs));
+        waited += attemptGapMs + 800; // account for the in-loop wait above
+    }
+
+    if (!responded)
+    {
+        std::cout << "VERIFY FAILED: no identity reply within the window - the device did not come "
+                     "back up as a bootloader (try a longer --verify-settle/--verify-timeout).\n";
+        return 1;
+    }
+    if (state == kmiDevice::State::bootloader)
+    {
+        std::cout << "VERIFY OK: device is in bootloader mode - trojan install succeeded.\n";
+        return 0;
+    }
+    std::cout << "VERIFY WARNING: device responded but is NOT in bootloader mode; "
+                 "the install may not have taken.\n";
+    return 1;
+}
+
+int runBlSend(const CliOptions &options)
+{
+    if (options.filePath.empty())
+    {
+        std::cout << "ERROR: --bl-send requires -f <file.syx>.\n";
+        return 1;
+    }
+    const bool haveExplicitPort = options.usePortNumber || !options.portName.empty();
+    if (!options.blDryRun && !haveExplicitPort && options.familyName.empty())
+    {
+        std::cout << "ERROR: --bl-send needs a MIDI output port: -p <num>, -n <name>, "
+                     "or --family <name> to auto-select (e.g. --family SoftStep).\n";
+        return 1;
+    }
+
+    std::vector<unsigned char> bytes;
+    std::string readError;
+    if (!readBinaryFile(options.filePath, bytes, &readError))
+    {
+        std::cout << "ERROR: " << readError << "\n";
+        return 1;
+    }
+
+    const blupgrade::LegacyFirmwareImage img =
+        blupgrade::decodeLegacyFirmwareSyx(std::vector<uint8_t>(bytes.begin(), bytes.end()));
+    if (!img.ok)
+    {
+        std::cout << "ERROR: could not decode legacy image: " << img.error << "\n";
+        return 1;
+    }
+    if (!img.allCrcOk())
+    {
+        std::cout << "ERROR: decoded image has CRC failures - refusing to send a corrupt image. "
+                     "Run --bl-decode " << options.filePath << " to inspect.\n";
+        return 1;
+    }
+
+    // CoreMIDI flow-controlled path (macOS): send the whole ORIGINAL padded
+    // image (bytes, with its baked-in inter-sector zero padding intact) as one
+    // SysEx via MIDISendSysex(), which paces the transfer and honors USB
+    // back-pressure so the device isn't overrun during its blocking flash
+    // erases. This is the prototype for the RtMidi CoreMIDI-backend fix; it
+    // deliberately does NOT sub-split or reframe - RtMidi's MIDISend blast is
+    // exactly what bricks these units. --step/gaps/--bank-probe do not apply
+    // here (that fragmented control needs the RtMidi framing state machine
+    // that's still to come).
+    if (options.blCoreMidi)
+    {
+        std::string targetName = options.portName;
+        if (targetName.empty() && !options.familyName.empty())
+        {
+            RtMidiOut probe(midiBackend::selectedApi());
+            std::string resolveErr;
+            if (!resolveFamilyControlSurfacePort(options.familyName, probe, targetName, resolveErr))
+            {
+                std::cout << "ERROR: " << resolveErr << " Use -n <dest name> or --family.\n";
+                return 1;
+            }
+        }
+        if (targetName.empty())
+        {
+            std::cout << "ERROR: --coremidi needs -n <destination name> or --family <name>.\n";
+            return 1;
+        }
+        std::string sendErr;
+        if (!sendSysExViaCoreMIDI(targetName, bytes, options.blSpeedBytesPerSec, sendErr))
+        {
+            std::cout << "ERROR: " << sendErr << "\n";
+            return 1;
+        }
+        std::cout << "CoreMIDI flow-controlled send complete.\n";
+        return 0;
+    }
+
+    BlSendOptions sendOpts;
+    sendOpts.step = options.blStep;
+    sendOpts.dryRun = options.blDryRun;
+    sendOpts.blockToDataGapMs = options.blBlockToDataGapMs;
+    sendOpts.sectorGapMs = options.blSectorGapMs;
+    sendOpts.firstBlockToDataGapMs = options.blFirstBlockToDataGapMs;
+    sendOpts.bankTransitionMs = options.blBankTransitionMs;
+    sendOpts.postDelayMs = options.postDelayMs;
+    sendOpts.bankProbe = options.blBankProbe;
+    sendOpts.preProbeDelayMs = options.blPreProbeDelayMs;
+    sendOpts.bankProbeTimeoutMs = options.blBankProbeTimeoutMs;
+    sendOpts.probeFirst = options.blProbeFirst;
+    sendOpts.probeOnly = options.blProbeOnly;
+    sendOpts.probeTimeoutMs = options.blProbeTimeoutMs;
+    sendOpts.paddingScale = options.blPaddingScale;
+
+    try
+    {
+        RtMidiOut midiOut(midiBackend::selectedApi());
+
+        // Dry run inspects the send schedule without a device, so don't insist
+        // on resolving/opening a real port.
+        std::string portName = options.portName.empty() ? "DRY-RUN" : options.portName;
+        if (!sendOpts.dryRun)
+        {
+            int portNumber = -1;
+            if (options.usePortNumber)
+            {
+                portNumber = options.portNumber;
+            }
+            else if (!options.portName.empty())
+            {
+                portNumber = kmiDevice::findOutputPortNumberByName(midiOut, options.portName);
+            }
+            else if (!options.familyName.empty())
+            {
+                // Auto-select the family's control-surface output port (handles
+                // legacy SSCOM's unnamed "port 1 / port 2" enumeration).
+                std::string resolvedName, resolveErr;
+                if (!resolveFamilyControlSurfacePort(options.familyName, midiOut, resolvedName, resolveErr))
+                {
+                    std::cout << "ERROR: " << resolveErr << " Use -l to list ports, or pass -n/-p.\n";
+                    return 1;
+                }
+                std::cout << "Auto-selected " << options.familyName << " port: \"" << resolvedName << "\"\n";
+                portNumber = kmiDevice::findOutputPortNumberByName(midiOut, resolvedName);
+            }
+
+            const unsigned int numOutPorts = midiOut.getPortCount();
+            if (portNumber < 0 || static_cast<unsigned int>(portNumber) >= numOutPorts)
+            {
+                std::cout << "ERROR: MIDI output port not found. Use -l to list ports.\n";
+                return 1;
+            }
+            portName = midiOut.getPortName(static_cast<unsigned int>(portNumber));
+            midiOut.openPort(static_cast<unsigned int>(portNumber));
+        }
+
+        std::string sendError;
+        if (!sendLegacyImageSectorwise(midiOut, portName, img, sendOpts, sendError))
+        {
+            std::cout << "ERROR: " << sendError << "\n";
+            return 1;
+        }
+    }
+    catch (RtMidiError &error)
+    {
+        std::cout << "ERROR: " << error.getMessage() << "\n";
+        return 1;
+    }
+
+    // Post-send verification: the device has closed its send port and rebooted;
+    // confirm it came back up in its bootloader. (Skip for --probe-only, which
+    // never sent firmware, and for dry runs.)
+    if (options.blVerify && !options.blDryRun && !options.blProbeOnly)
+    {
+        const std::string fam = !options.familyName.empty() ? options.familyName : familyFromImage(img);
+        if (fam.empty())
+        {
+            std::cout << "VERIFY SKIPPED: could not determine family from the image; "
+                         "pass --family to enable verification.\n";
+            return 0;
+        }
+        return verifyInstallViaIdRequest(fam, options.blVerifySettleMs, options.blVerifyTimeoutS);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --bootloader-install <family>: guided, logged, end-to-end legacy trojan
+// bootloader install. macOS only for now (legacy send path is CoreMIDI-proven;
+// WinMM/WMS still to come). SoftStep supported today.
+// ---------------------------------------------------------------------------
+
+// 75-byte SoftStep firmware-dump request (ss_firmware_update_request.syx): asks a
+// legacy unit to send its own firmware image back, used as a second connectivity
+// proof before we commit to flashing.
+static const unsigned char kSoftStepDumpRequest[] = {
+    0xF0, 0x00, 0x1B, 0x48, 0x7A, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x33, 0x70,
+    0x00, 0x30, 0xF7,
+};
+
+// Duplicates everything written to std::cout into a log file, so the whole
+// session (all our output, and the helpers' output) is captured. User input read
+// via std::cin is logged separately (logInput), since cin doesn't pass through cout.
+class CoutTee : public std::streambuf
+{
+public:
+    CoutTee(std::streambuf *console, std::streambuf *file) : console_(console), file_(file) {}
+protected:
+    int overflow(int c) override
+    {
+        if (c == EOF) return !EOF;
+        const int r1 = console_->sputc(static_cast<char>(c));
+        const int r2 = file_->sputc(static_cast<char>(c));
+        return (r1 == EOF || r2 == EOF) ? EOF : c;
+    }
+    int sync() override { return (console_->pubsync() == 0 && file_->pubsync() == 0) ? 0 : -1; }
+private:
+    std::streambuf *console_, *file_;
+};
+
+struct SessionLog
+{
+    std::ofstream file;
+    std::streambuf *old;
+    CoutTee *tee;
+    SessionLog(const std::string &path) : old(std::cout.rdbuf()), tee(0)
+    {
+        file.open(path.c_str(), std::ios::out | std::ios::app);
+        if (file.is_open())
+        {
+            tee = new CoutTee(old, file.rdbuf());
+            std::cout.rdbuf(tee);
+        }
+    }
+    ~SessionLog() { std::cout.rdbuf(old); delete tee; }
+    void logInput(const std::string &s) { if (file.is_open()) { file << s << "\n"; file.flush(); } }
+};
+
+// Send the family's firmware-dump request and capture the returned image (one
+// F0..F7) on whichever input port it arrives on. Returns true if a complete
+// message was captured into out.
+static bool captureFirmwareDump(const std::string &familyId, std::vector<unsigned char> &out)
+{
+    if (familyId != "softstep")
+        return false;
+
+    struct DumpState
+    {
+        volatile bool done;
+        std::vector<unsigned char> buf;
+        DumpState() : done(false) {}
+    } state;
+
+    struct CB
+    {
+        static void proc(double, std::vector<unsigned char> *m, void *u)
+        {
+            DumpState *s = static_cast<DumpState *>(u);
+            if (s->done || m == 0 || m->size() < 4 || m->front() != 0xF0)
+                return;
+            s->buf = *m;
+            s->done = true;
+        }
+    };
+
+    RtMidiOut out_port(midiBackend::selectedApi());
+    int outIdx = -1;
+    for (unsigned int i = 0; i < out_port.getPortCount(); ++i)
+        if (out_port.getPortName(i).find("SSCOM") != std::string::npos) { outIdx = static_cast<int>(i); break; }
+    if (outIdx < 0)
+        return false;
+    out_port.openPort(static_cast<unsigned int>(outIdx));
+
+    std::vector<RtMidiIn *> ins;
+    RtMidiIn probe(midiBackend::selectedApi());
+    for (unsigned int i = 0; i < probe.getPortCount(); ++i)
+    {
+        RtMidiIn *in = 0;
+        try
+        {
+            in = new RtMidiIn(midiBackend::selectedApi());
+            in->ignoreTypes(false, false, false);
+            in->openPort(i);
+            in->setCallback(CB::proc, &state);
+            ins.push_back(in);
+        }
+        catch (...) { delete in; }
+    }
+
+    std::vector<unsigned char> req(kSoftStepDumpRequest, kSoftStepDumpRequest + sizeof(kSoftStepDumpRequest));
+    out_port.sendMessage(&req);
+    for (int waited = 0; waited < 15000 && !state.done; waited += 20)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    for (std::size_t i = 0; i < ins.size(); ++i) { try { ins[i]->closePort(); } catch (...) {} delete ins[i]; }
+
+    if (!state.done)
+        return false;
+    out.swap(state.buf);
+    return true;
+}
+
+// Build the default output directory: ./bootloader-install-<family>-<timestamp>.
+static std::string defaultOutDir(const std::string &familyId)
+{
+    std::time_t t = std::time(0);
+    std::tm *lt = std::localtime(&t);
+    char stamp[32] = {0};
+    if (lt)
+        std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", lt);
+    return "bootloader-install-" + familyId + "-" + stamp;
+}
+
+static std::string trimUpper(const std::string &s)
+{
+    std::string t = trimCopy(s);
+    for (std::size_t i = 0; i < t.size(); ++i)
+        t[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(t[i])));
+    return t;
+}
+
+int runBootloaderInstall(const CliOptions &options)
+{
+    const std::string fam = normalizeFamilyId(options.familyName);
+    if (fam != "softstep")
+    {
+        std::cout << "ERROR: --bootloader-install currently supports SoftStep only "
+                     "(got \"" << options.familyName << "\").\n";
+        return 1;
+    }
+#if defined(_WIN32)
+    std::cout << "ERROR: --bootloader-install is not yet supported on Windows "
+                 "(the legacy trojan send path is CoreMIDI-only for now).\n";
+    return 1;
+#else
+    // Output directory + full-session log tee (captures all cout + user input).
+    const std::string outDir = options.blOutDir.empty() ? defaultOutDir(fam) : options.blOutDir;
+    ::mkdir(outDir.c_str(), 0755);
+    const std::string logPath = outDir + "/session.log";
+    SessionLog log(logPath);
+
+    std::cout << "=== SoftStep Bootloader Install ===\n";
+    std::cout << "Session log: " << logPath << "\n\n";
+
+    // 1) Detect the legacy (pre-bootloader) unit and its firmware version.
+    std::string ver;
+    if (!runLegacyVersionQuery(fam, ver))
+    {
+        std::cout << "ERROR: no legacy (pre-bootloader) SoftStep detected. Connect an SSCOM-era unit "
+                     "and try again.\n";
+        return 1;
+    }
+    if (ver.empty())
+        ver = "unknown";
+
+    // 2) Warning + explicit consent gate.
+    std::cout << "WARNING: your device is running legacy firmware version " << ver
+              << ", which does not have a bootloader. Updating firmware without a bootloader is risky,"
+                 " and if interrupted can brick your device. This utility does it's best to install a"
+                 " bootloader safely, but proceed with caution. Close ALL programs except for this"
+                 " update, disconnect all USB devices, and ensure that your cable connection is secure"
+                 " and that you are using a known good cable. If the update fails, you can submit a"
+                 " support ticket at https://support.musekinetics.com and arrange to ship the unit back"
+                 " to our office in California, but you will need to cover the shipping costs there and"
+                 " back.\n\n";
+    std::cout << "To proceed, please type \"I UNDERSTAND THE RISKS\": " << std::flush;
+    std::string consent;
+    std::getline(std::cin, consent);
+    log.logInput(consent);
+    if (trimUpper(consent) != "I UNDERSTAND THE RISKS")
+    {
+        std::cout << "Aborted\n";
+        return 1;
+    }
+
+    // 3) Connection validation: five version requests, 2 s apart.
+    std::cout << "\nValidating connection (5 firmware-version requests, 2s apart) ...\n";
+    int replies = 0;
+    for (int i = 1; i <= 5; ++i)
+    {
+        std::string v;
+        const bool got = runLegacyVersionQuery(fam, v);
+        std::cout << "  [" << i << "/5] " << (got ? ("reply - version " + (v.empty() ? std::string("?") : v))
+                                                   : std::string("NO REPLY")) << "\n";
+        if (got)
+            ++replies;
+        if (i < 5)
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+    if (replies < 5)
+    {
+        std::cout << "Connection unstable (" << replies << "/5 replied). Aborting for safety - check the "
+                     "cable/port and retry.\n";
+        return 1;
+    }
+    std::cout << "Connection stable (5/5 replied).\n";
+
+    // 4) Second validation: ask the device to dump its own firmware image and
+    //    sanity-check it (single F0..F7 with the KMI SoftStep header).
+    std::cout << "\nRequesting the device's current firmware image (dump validation) ...\n";
+    std::vector<unsigned char> dump;
+    if (!captureFirmwareDump(fam, dump))
+    {
+        std::cout << "ERROR: the device did not return a firmware image. Aborting before flashing.\n";
+        return 1;
+    }
+    const std::string dumpPath = outDir + "/device-dump-v" + ver + ".syx";
+    {
+        std::ofstream df(dumpPath.c_str(), std::ios::binary);
+        df.write(reinterpret_cast<const char *>(dump.data()), static_cast<std::streamsize>(dump.size()));
+    }
+    const bool dumpValid = dump.size() > 10 && dump.front() == 0xF0 && dump.back() == 0xF7 &&
+                           dump[1] == 0x00 && dump[2] == 0x1B && dump[3] == 0x48 && dump[4] == 0x7A;
+    std::cout << "Captured " << dump.size() << " bytes -> " << dumpPath << "\n";
+    if (!dumpValid)
+    {
+        std::cout << "ERROR: captured image failed validation (expected F0 00 1B 48 7A ... F7). Aborting.\n";
+        return 1;
+    }
+    std::cout << "Image validated (F0 ... F7, KMI SoftStep header present).\n";
+
+    // 5) Install the trojan bootloader via --bl-send with the proven macOS timing
+    //    preset and post-send --verify. Resolve the trojan from the family JSON.
+    std::string trojanPath;
+    {
+        deviceDatabase db;
+        if (!db.loadFamily(fam) || !db.getPayloadPath("bootloader_installer", 0, trojanPath) || trojanPath.empty())
+        {
+            std::cout << "ERROR: could not locate the bootloader installer image in the device database.\n";
+            return 1;
+        }
+    }
+
+    std::cout << "\nInstalling bootloader (this takes ~30-40s; do not disconnect) ...\n";
+    CliOptions bl = options;
+    bl.bootloaderInstall = false;
+    bl.blSend = true;
+    bl.familyName = "SoftStep";
+    bl.filePath = trojanPath;
+    bl.portName.clear();
+    bl.usePortNumber = false;
+    bl.blPaddingScale = 1.0;             // byte-exact (proven)
+    bl.blFirstBlockToDataGapMs = 1000;   // macOS preset
+    bl.blBlockToDataGapMs = 100;
+    bl.blSectorGapMs = 100;
+    bl.blBankTransitionMs = 1000;
+    bl.postDelayMs = 3000;
+    bl.blBankProbe = false;
+    bl.blProbeFirst = false;
+    bl.blProbeOnly = false;
+    bl.blVerify = true;
+    const int blResult = runBlSend(bl);
+
+    if (blResult != 0)
+    {
+        std::cout << "\nFAILURE: Unfortunately your device failed to respond with the correct bootloader"
+                     " version. Try power cycling your device, if it still boots and shows LED activity,"
+                     " try the process again. If it does not boot, submit a support ticket to"
+                     " https://support.musekinetics.com and include the firmware image and log file"
+                     " located at: " << outDir << "\n";
+        return 1;
+    }
+
+    std::cout << "\nSUCCESS: The bootloader was successfully installed.\n\n";
+
+    // 6) Offer to load the latest application firmware via --fw-update.
+    std::string latest;
+    {
+        deviceDatabase db;
+        if (db.loadFamily(fam))
+            db.getDefaultFirmwareVersion(latest);
+    }
+    std::cout << "Do you want to load the latest firmware version "
+              << (latest.empty() ? std::string("(latest)") : latest) << " y/N: " << std::flush;
+    std::string ans;
+    std::getline(std::cin, ans);
+    log.logInput(ans);
+    const std::string a = trimUpper(ans);
+    if (a == "Y" || a == "YES")
+    {
+        std::cout << "\nLoading firmware " << (latest.empty() ? std::string("(latest)") : latest) << " ...\n";
+        CliOptions fw = options;
+        fw.bootloaderInstall = false;
+        fw.automaticMode = true;
+        fw.familyName = "SoftStep"; // version defaults to the family's latest
+        return runAutomaticProcess(fw);
+    }
+    std::cout << "Done. Firmware not loaded (bootloader is installed; you can run --fw-update SoftStep "
+                 "any time).\n";
+    return 0;
+#endif
+}
+
 int runManualProcess(const CliOptions &options)
 {
     try
@@ -911,6 +1931,7 @@ int main(int argc, const char *argv[])
         return 1;
     }
 
+    std::cout << "OS: " << midiBackend::describeOs() << "\n";
     std::cout << "MIDI backend: " << midiBackend::describeSelectedApi() << "\n";
 
     std::cout << "Chunk size: " << options.chunkSize << " bytes, delay: " << options.chunkDelayMs
@@ -919,11 +1940,20 @@ int main(int argc, const char *argv[])
     if (options.listNormalizedOnly && options.filePath.empty() && options.versionText.empty())
         return runManualProcess(options);
 
+    if (options.bootloaderInstall)
+        return runBootloaderInstall(options);
+
     if (options.idRequestOnly)
         return runIdentityRequest(options);
 
     if (options.blEraseRebootCmd)
         return runBlEraseRebootCmd(options);
+
+    if (options.blDecodeOnly)
+        return runBlDecode(options);
+
+    if (options.blSend)
+        return runBlSend(options);
 
     if (options.automaticMode)
         return runAutomaticProcess(options);

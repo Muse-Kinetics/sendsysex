@@ -33,6 +33,11 @@ RtMidi::Api selectedApi();
 // Human-readable description of the selected backend, e.g. "Windows MIDI
 // Services" or "Windows Multimedia (WinMM)", for the CLI startup banner.
 std::string describeSelectedApi();
+
+// Human-readable host OS + version for the CLI startup banner, e.g.
+// "macOS 26.3", "Windows 11 25H2 (build 26100)", "Linux 6.3 (Ubuntu 24.04)".
+// Best-effort; falls back to a coarse label if the exact version can't be read.
+std::string describeOs();
 }
 
 #endif
