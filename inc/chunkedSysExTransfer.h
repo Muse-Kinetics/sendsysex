@@ -115,20 +115,39 @@ inline bool waitForIdReply(RtMidiOut &midiOut, ChunkReplyState &state, unsigned 
 
     const unsigned int pollIntervalMs = 5;
     const unsigned int resendIntervalMs = 300;
-    unsigned int waited = 0;
-    unsigned int sinceLastSend = 0;
+
+    // Real-hardware finding (2026-08-26, SoftStep, WMS): waited/sinceLastSend
+    // used to be naive counters incremented by a fixed pollIntervalMs per
+    // loop iteration, on the assumption each iteration costs exactly that
+    // much wall-clock time. It doesn't - midiOut.sendMessage() itself can
+    // block for far longer than 5ms (observed: a 3000ms-budget wait actually
+    // took ~9.4s wall-clock, --timestamp made this visible), and that extra
+    // time was invisible to the counters, silently blowing well past the
+    // configured budget. Measuring against steady_clock instead makes the
+    // actual elapsed time match what was asked for, regardless of how long
+    // any individual sendMessage() call takes.
+    const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point lastSend = start;
 
     midiOut.sendMessage(&idRequest);
-    while (!state.received && waited < waitMs)
+    while (!state.received)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
-        waited += pollIntervalMs;
-        sinceLastSend += pollIntervalMs;
+        const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - start).count();
+        if (elapsedMs >= static_cast<long long>(waitMs))
+            break;
 
-        if (!state.received && sinceLastSend >= resendIntervalMs && waited < waitMs)
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
+        if (state.received)
+            break;
+
+        const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+        const long long sinceLastSendMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSend).count();
+        const long long totalElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+        if (sinceLastSendMs >= static_cast<long long>(resendIntervalMs) && totalElapsedMs < static_cast<long long>(waitMs))
         {
             midiOut.sendMessage(&idRequest);
-            sinceLastSend = 0;
+            lastSend = std::chrono::steady_clock::now();
         }
     }
     return state.received;
@@ -246,8 +265,6 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
     for (std::size_t i = 0; i < chunks.size() && ok; ++i)
     {
         const SysExChunk &chunk = chunks[i];
-        std::cout << "Chunk " << (i + 1) << "/" << chunks.size()
-                  << " (" << chunk.length << " bytes)\n";
 
         try
         {
@@ -304,13 +321,6 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
             break;
         }
 
-        // printProgress only prints its own trailing newline once the whole file
-        // is done (bytesSentOverall >= totalBytes) - end this chunk's bar line
-        // explicitly so per-chunk handshake status below always starts clean,
-        // including on every chunk before the last.
-        if (bytesSentOverall < totalBytes)
-            std::cout << "\n";
-
         if (haveInput)
         {
             // Checked after every chunk, including the last - previously
@@ -347,21 +357,50 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
             // final chunk is the same idea: postDelayMs exists specifically
             // because the receiver may need extra time (write/verify/
             // reboot-prep) after the last chunk before it can talk again.
-            const bool usedFirstChunkGrace = (i == 0 && firstChunkSize > 0 && firstChunkSize < chunk.length);
+            //
+            // Bug fixed 2026-08-26 (real SoftStep hardware): this used to
+            // additionally require firstChunkSize > 0 && firstChunkSize <
+            // chunk.length - i.e. an actual sub-split of chunk 0 - before
+            // applying firstGapDelayMs at all. But the receiver's blocking
+            // erase is triggered by it recognizing chunk 0's header, which
+            // happens regardless of whether the *sender* chose to sub-split
+            // that chunk's own transmission. A family whose chunks are
+            // already small pre-framed messages (SoftStep's Hex_to_SysEx
+            // packaging - chunk 0 as small as 38 bytes) never needs
+            // firstChunkSize sub-splitting at all, so that old condition was
+            // always false and firstGapDelayMs from softstep.json's
+            // firmwareUpdateDefaults was silently never applied - reply wait
+            // after chunk 0 stayed at chunkDelayMs (100ms) regardless of what
+            // the JSON said, reproducing the exact "NO REPLY within 100 ms"
+            // failure the JSON fix was supposed to prevent.
+            const bool isFirstChunk = (i == 0);
             const bool isLastChunk = (i + 1 == chunks.size());
             unsigned int replyWaitMs = chunkDelayMs;
-            if (usedFirstChunkGrace)
+            if (isFirstChunk)
                 replyWaitMs = std::max(replyWaitMs, firstGapDelayMs);
             if (isLastChunk)
                 replyWaitMs = std::max(replyWaitMs, postDelayMs);
 
             if (waitForIdReply(midiOut, replyState, replyWaitMs))
             {
-                std::cout << "  reply OK (" << (chunks.size() - i - 1) << " chunk(s) remaining)\n";
+                // Folded into the same in-place bar line (printProgress just
+                // left the cursor right after it, mid-transfer) rather than a
+                // permanent line per chunk - a many-small-chunk file (e.g.
+                // SoftStep's ~290 chunks) would otherwise flood the terminal
+                // with one scrollback line per chunk instead of one steadily
+                // updating line. Padded to a fixed width so a shorter later
+                // redraw can't leave stray trailing characters from a longer
+                // earlier one. Real failures below still get a permanent,
+                // newline-broken line - that visibility is what surfaced the
+                // 2026-08-25 SoftStep timing issue and must not be lost.
+                std::string suffix = "  reply OK (" + std::to_string(chunks.size() - i - 1) + " left)";
+                if (suffix.size() < 24)
+                    suffix.append(24 - suffix.size(), ' ');
+                std::cout << suffix << std::flush;
             }
             else
             {
-                std::cout << "  NO REPLY within " << replyWaitMs << " ms\n";
+                std::cout << "\n  NO REPLY within " << replyWaitMs << " ms\n";
                 errorMessage = "No identity reply after chunk " + std::to_string(i + 1) + "/"
                               + std::to_string(chunks.size())
                               + (isLastChunk
@@ -378,6 +417,10 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
 
     if (ok)
     {
+        // The last chunk's "reply OK" suffix (if any) is left mid-line by
+        // design (see above) - break out of it before the summary line.
+        if (haveInput)
+            std::cout << "\n";
         std::cout << "Successfully sent all " << chunks.size() << " chunk(s) to MIDI OUT port: "
                   << outputPortName << ", size: " << bytes.size() << " bytes.\n";
         if (postDelayMs > 0U)

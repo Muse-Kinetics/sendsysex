@@ -49,7 +49,6 @@ add_executable(SendSysEx
     src/deviceDatabase.cpp
     src/midiBackend.cpp
     src/bootloaderUpgrade.cpp
-    src/coreMidiSend.cpp
     ${MIDI_CPP_DIR}/src/MIDI_sysex.cpp
     ${MIDI_CPP_DIR}/src/MIDI_bytestream_parser.cpp
     ${MIDI_CPP_DIR}/src/MIDI_device_metadata.cpp
@@ -63,16 +62,6 @@ target_include_directories(SendSysEx PRIVATE
 )
 
 target_link_libraries(SendSysEx PRIVATE rtmidi)
-
-if(APPLE)
-    # coreMidiSend.cpp calls CoreMIDI's MIDISendSysex() directly (flow-controlled
-    # sysex path RtMidi abandoned upstream). CoreMIDI is likely already pulled in
-    # transitively by rtmidi's coremidi backend, but link it explicitly so this
-    # translation unit's symbols resolve regardless of rtmidi's link visibility.
-    find_library(CORE_MIDI_FRAMEWORK CoreMIDI REQUIRED)
-    find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-    target_link_libraries(SendSysEx PRIVATE ${CORE_MIDI_FRAMEWORK} ${CORE_FOUNDATION_FRAMEWORK})
-endif()
 
 if(WIN32)
     # RtMidi.h gates its WMS-specific declarations (e.g.

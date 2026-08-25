@@ -26,6 +26,19 @@
       "SoftStep 3 uses its own PID but shares the SoftStep family naming."
     ]
   },
+  "transport": {
+    "firmwareUpdateDefaults": {
+      "firstGapDelayMs": 5000,
+      "postDelayMs": 1000,
+      "notes": [
+        "Real-hardware finding (2026-08-25): after installing the bootloader via --bl-send and choosing to load the latest firmware, --fw-update's chunked send failed twice - 'NO REPLY within 100 ms' after chunk 1, and 'NO REPLY within 500 ms' after the final chunk (290/290) - both defaults (chunkDelayMs=100, postDelayMs=500) far too short.",
+        "Same underlying mechanism as K-Board/KBP4 (see kboard.json's own firmwareUpdateDefaults and sendsysex/docs/kmi_fw_update_process.md, 'Flash Layout and Boot Flow'): this bootloader erases its entire application region unconditionally on the first valid firmware packet ('flashErased' flag), blocking further USB service until that finishes - so the reply wait after chunk 1 needs the same long settle firstGapDelayMs provides.",
+        "firstGapDelayMs bumped 3000ms -> 5000ms (2026-08-26) after --timestamp-instrumented real-hardware runs (fixing a separate bug in chunkedSysExTransfer.h's waitForIdReply that had been silently inflating the actual wait to ~9.4s) showed the accurately-measured chunk-1 reply-wait landing right at/just past 3000ms - a real margin problem, not a one-off. 5000ms gives real headroom and has landed clean on attempt 1 across repeated timestamped runs since.",
+        "postDelayMs deliberately kept SHORT (1000ms, not raised to match firstGapDelayMs) - unlike chunk 1, the final chunk's reply-wait is not a 'needs more time' problem: --timestamp runs showed it still failing at both 3000ms and 5000ms (i.e. genuinely never replying, not just slow), because a successful write makes this bootloader reboot straight into application mode within that same window - the bootloader port we were querying is simply gone by the time any reply could arrive, no matter how long we wait. kmiDevice::runAutomaticUpdate() already has a real fallback for exactly this (isAmbiguousBootloaderPortLoss(), added 2026-08-26): it detects this specific failure and falls through to waiting for the device to reconnect on the *application* port, then verifies the reported version actually matches what was requested - a strictly more meaningful check than a bootloader-port reply ever was for a payload whose whole point is to reboot the device. Keeping postDelayMs short here just gets to that real verification faster instead of burning multiple extra seconds waiting for a reply that structurally cannot come.",
+        "firstChunkSize/chunkDelayMs intentionally left at their defaults (0/100) - SoftStep's Hex_to_SysEx packaging already pre-chunks into many small independently-framed messages (as low as 38 bytes for chunk 1), well under any reasonable -fcs value, so first-window sub-splitting doesn't apply here; the steady-state 100ms inter-chunk delay was never the problem (chunks 2-289 all replied fine at that pace)."
+      ]
+    }
+  },
   "payloads": [
     {
       "id": "enter_bootloader",

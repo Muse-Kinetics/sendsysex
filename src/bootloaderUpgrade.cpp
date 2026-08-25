@@ -354,9 +354,11 @@ void printLegacyImageManifest(const LegacyFirmwareImage &img)
                 si = b.sectors.size() - 2;
             }
             const Sector &s = b.sectors[si];
-            std::printf("   block %3u: declared=%4u data=%4u  blkHdrCRC=%s dataCRC=%s\n",
+            std::printf("   block %3u: declared=%4u data=%4u  blkHdrCRC=%s dataCRC=%s  "
+                        "rawWire(hdr=%4zu data=%5zu)\n",
                         s.blockNum, s.declaredLength, s.dataLength,
-                        s.blockHeaderCrcOk ? "ok" : "BAD", s.dataCrcOk ? "ok" : "BAD");
+                        s.blockHeaderCrcOk ? "ok" : "BAD", s.dataCrcOk ? "ok" : "BAD",
+                        s.blockHeaderRaw.size(), s.dataRaw.size());
         }
     }
 }

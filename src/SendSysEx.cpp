@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -17,6 +18,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#include <direct.h> // _mkdir
+#endif
+
 #include "RtMidi.h"
 #include "deviceHelpers.h"
 #include "kmiDevice.h"
@@ -25,7 +30,6 @@
 #include "chunkedSysExTransfer.h"
 #include "bootloaderUpgrade.h"
 #include "bootloaderSend.h"
-#include "coreMidiSend.h"
 #include "version.h"
 
 namespace
@@ -94,8 +98,65 @@ struct CliOptions
     unsigned int blVerifyTimeoutS = 15U; // how long to keep retrying the id request after the settle
     bool bootloaderInstall = false;  // --bootloader-install <family>: guided end-to-end trojan install
     std::string blOutDir;            // --out-dir: where the session log + captured image go
-    bool blCoreMidi = false;
-    int blSpeedBytesPerSec = 3125; // --coremidi: force kMIDIPropertyMaxSysExSpeed (1x MIDI). 0 = leave endpoint default.
+    bool timestampOutput = false;    // --timestamp: prefix every line of output with a wall-clock timestamp
+};
+
+// Prefixes every line written to std::cout with a "[HH:MM:SS.mmm] " wall-clock
+// timestamp, installed by --timestamp. Triggers on '\n' AND '\r' (not just
+// '\n') so the progress bar's in-place \r-redraws each get a fresh timestamp
+// too - exactly the granularity needed to see how long a real stall lasted
+// (e.g. mid-transfer device unresponsiveness) without guessing from wall-
+// clock-free log lines. Wraps whatever streambuf std::cout already has, so it
+// composes with SessionLog's CoutTee (--bootloader-install's session log)
+// regardless of which one gets installed first - timestamps land in both the
+// console and the log file when both are active.
+class TimestampStreambuf : public std::streambuf
+{
+public:
+    explicit TimestampStreambuf(std::streambuf *dest) : dest_(dest), atLineStart_(true) {}
+
+protected:
+    int overflow(int c) override
+    {
+        if (c == EOF)
+            return dest_->pubsync() == 0 ? c : EOF;
+        if (atLineStart_ && c != '\n' && c != '\r')
+        {
+            const std::string ts = currentTimestamp();
+            for (std::size_t i = 0; i < ts.size(); ++i)
+                if (dest_->sputc(ts[i]) == EOF)
+                    return EOF;
+            atLineStart_ = false;
+        }
+        if (c == '\n' || c == '\r')
+            atLineStart_ = true;
+        return dest_->sputc(static_cast<char>(c)) == EOF ? EOF : c;
+    }
+
+    int sync() override { return dest_->pubsync(); }
+
+private:
+    static std::string currentTimestamp()
+    {
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t nowTimeT = std::chrono::system_clock::to_time_t(now);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch()) % 1000;
+        std::tm localTm{};
+#if defined(_WIN32)
+        localtime_s(&localTm, &nowTimeT);
+#else
+        localtime_r(&nowTimeT, &localTm);
+#endif
+        char buf[16] = {0};
+        std::strftime(buf, sizeof(buf), "%H:%M:%S", &localTm);
+        char full[24] = {0};
+        std::snprintf(full, sizeof(full), "[%s.%03d] ", buf, static_cast<int>(ms.count()));
+        return std::string(full);
+    }
+
+    std::streambuf *dest_;
+    bool atLineStart_;
 };
 
 
@@ -147,7 +208,8 @@ void printHelp()
         << "                             validates the connection (5 version requests) and a firmware\n"
         << "                             dump, installs the bootloader with --verify, then offers to load\n"
         << "                             the latest firmware. Logs the whole session + captured image to\n"
-        << "                             --out-dir. macOS + SoftStep only for now.\n"
+        << "                             --out-dir. SoftStep only for now. On Windows, requires Windows MIDI\n"
+        << "                             Services (auto-detect will use it, or pass --midi-backend wms).\n"
         << "  --out-dir <path>           Directory for --bootloader-install's session log + captured\n"
         << "                             image (default: ./bootloader-install-<family>-<timestamp>).\n"
         << "  --id-request <family>      Connect, send an identity request, print the reply, then exit\n"
@@ -190,6 +252,10 @@ void printHelp()
         << "  a single message - the receiver resets its stage flag on every F0. WARNING: the update\n"
         << "  erases the reset vector mid-flight; a failure can brick the unit (recoverable only over\n"
         << "  SiLabs USB/JTAG). Send only to a unit you can re-flash.\n"
+        << "  On Windows, --bl-send REQUIRES Windows MIDI Services (--midi-backend wms, or auto-detect\n"
+        << "  picking it up): WinMM has been observed causing this class of device to surprise-\n"
+        << "  disconnect from the USB bus during the blocking flash-patch step, which cannot be\n"
+        << "  recovered from mid-transfer. WMS is validated end-to-end on real hardware.\n"
         << "  --bl-decode                 Decode a legacy image and print its bank/sector manifest\n"
         << "                              (offline; opens no port). Use to inspect/verify CRCs.\n"
         << "  --bl-send                   Stream a legacy image (-f) to -p/-n one sector at a time\n"
@@ -247,23 +313,15 @@ void printHelp()
         << "  --strip-padding             Alias for --padding-scale 0. Drops ~19.7 KB of padding, which\n"
         << "                              on real hardware misframes and reboots the unit - experiment only.\n"
         << "  --dry-run                   Print the send schedule without opening a port or sending.\n"
-        << "  --coremidi                  macOS only. Send the WHOLE image (padding intact) as one\n"
-        << "                              SysEx via CoreMIDI's flow-controlled MIDISendSysex(), instead\n"
-        << "                              of RtMidi's MIDISend (which bursts each buffer at full USB\n"
-        << "                              speed and bricks these fragile units). Ignores --step/gaps/\n"
-        << "                              --bank-probe. Recommended path on macOS. E.g.:\n"
-        << "                              --bl-send --coremidi --family SoftStep -f <legacy.syx>\n"
-        << "  --speed <bytes/sec>         With --coremidi, force kMIDIPropertyMaxSysExSpeed on the\n"
-        << "                              destination (default 3125 = 1x MIDI, SysEx Librarian's 100%).\n"
-        << "                              MIDISendSysex paces to this; a USB-MIDI driver advertising a\n"
-        << "                              higher rate would otherwise overrun a fragile device. 0 =\n"
-        << "                              leave the endpoint's advertised speed untouched.\n"
-        << "  (-pd/--post-delay also applies to the non-coremidi path: wait after the final F7.)\n"
+        << "  (-pd/--post-delay also applies here: wait after the final F7.)\n"
         << "\nGlobal options:\n"
         << "  --midi-backend <winmm|wms>  Windows only. Force a specific RtMidi backend instead of\n"
         << "                              auto-detecting. 'wms' fails immediately if the Windows MIDI\n"
         << "                              Services SDK runtime isn't installed/running, rather than\n"
         << "                              silently falling back to WinMM the way auto-detect does.\n"
+        << "  --timestamp                 Prefix every line of output with a [HH:MM:SS.mmm] wall-clock\n"
+        << "                              timestamp, including in-place progress-bar redraws. For\n"
+        << "                              diagnosing exactly how long a real stall lasted on hardware.\n"
         << "  -h, --help                  Show this help message\n"
         << "\nNotes:\n"
         << "  - Raw send mode uses RtMidi directly and does not normalize port names for you.\n"
@@ -727,6 +785,11 @@ CliOptions parseArguments(int argc, const char *argv[])
             options.midiBackendOverride = argv[++i];
             continue;
         }
+        if (arg == "--timestamp")
+        {
+            options.timestampOutput = true;
+            continue;
+        }
         if (arg == "--bl-decode")
         {
             options.blDecodeOnly = true;
@@ -882,23 +945,6 @@ CliOptions parseArguments(int argc, const char *argv[])
             options.familyName = argv[++i];
             continue;
         }
-        if (arg == "--coremidi")
-        {
-            options.blCoreMidi = true;
-            continue;
-        }
-        if (arg == "--speed")
-        {
-            unsigned int spd = 0;
-            if (i + 1 >= argc || !parseUnsignedOption(argv[++i], spd))
-            {
-                options.parseError = "Invalid or missing value for --speed (bytes/sec, 0 = leave endpoint default).";
-                return options;
-            }
-            options.blSpeedBytesPerSec = static_cast<int>(spd);
-            continue;
-        }
-
         options.showHelp = true;
         options.parseError = "Unrecognized argument: " + arg;
         return options;
@@ -1388,42 +1434,26 @@ int runBlSend(const CliOptions &options)
         return 1;
     }
 
-    // CoreMIDI flow-controlled path (macOS): send the whole ORIGINAL padded
-    // image (bytes, with its baked-in inter-sector zero padding intact) as one
-    // SysEx via MIDISendSysex(), which paces the transfer and honors USB
-    // back-pressure so the device isn't overrun during its blocking flash
-    // erases. This is the prototype for the RtMidi CoreMIDI-backend fix; it
-    // deliberately does NOT sub-split or reframe - RtMidi's MIDISend blast is
-    // exactly what bricks these units. --step/gaps/--bank-probe do not apply
-    // here (that fragmented control needs the RtMidi framing state machine
-    // that's still to come).
-    if (options.blCoreMidi)
+#if defined(_WIN32)
+    // Real-hardware finding (2026-08-25): under WinMM, this device genuinely
+    // surprise-disconnects from the USB bus (confirmed via the Kernel-PnP
+    // "surprise removed" event) during the blocking CRC-verify/flash-patch/
+    // jump at the bank-0 tail - not a driver busy signal we can retry through.
+    // Once the device is torn down mid-message there is no way to resume: a
+    // fresh port means a fresh F0, which re-triggers the receiver's erase-on-
+    // header behavior and corrupts whatever was already staged. WMS does not
+    // exhibit this and has been validated end-to-end (both banks + --verify)
+    // on real hardware, so it's required here rather than chasing the WinMM
+    // failure further.
+    if (!options.blDryRun && midiBackend::selectedApi() != RtMidi::WINDOWS_MIDI_SERVICES)
     {
-        std::string targetName = options.portName;
-        if (targetName.empty() && !options.familyName.empty())
-        {
-            RtMidiOut probe(midiBackend::selectedApi());
-            std::string resolveErr;
-            if (!resolveFamilyControlSurfacePort(options.familyName, probe, targetName, resolveErr))
-            {
-                std::cout << "ERROR: " << resolveErr << " Use -n <dest name> or --family.\n";
-                return 1;
-            }
-        }
-        if (targetName.empty())
-        {
-            std::cout << "ERROR: --coremidi needs -n <destination name> or --family <name>.\n";
-            return 1;
-        }
-        std::string sendErr;
-        if (!sendSysExViaCoreMIDI(targetName, bytes, options.blSpeedBytesPerSec, sendErr))
-        {
-            std::cout << "ERROR: " << sendErr << "\n";
-            return 1;
-        }
-        std::cout << "CoreMIDI flow-controlled send complete.\n";
-        return 0;
+        const std::string deviceLabel = options.familyName.empty() ? std::string("legacy") : options.familyName;
+        std::cout << "ERROR: the " << deviceLabel << " bootloader upgrade requires Windows MIDI Services. "
+                     "You may need to download and install the SDK from "
+                     "https://microsoft.github.io/MIDI/get-latest/, then try again.\n";
+        return 1;
     }
+#endif
 
     BlSendOptions sendOpts;
     sendOpts.step = options.blStep;
@@ -1515,8 +1545,10 @@ int runBlSend(const CliOptions &options)
 
 // ---------------------------------------------------------------------------
 // --bootloader-install <family>: guided, logged, end-to-end legacy trojan
-// bootloader install. macOS only for now (legacy send path is CoreMIDI-proven;
-// WinMM/WMS still to come). SoftStep supported today.
+// bootloader install. macOS only for now (this guided flow, including its
+// --verify step, is validated only on macOS; WinMM/WMS validation of the
+// underlying --bl-send send path is separate and still in progress). SoftStep
+// supported today.
 // ---------------------------------------------------------------------------
 
 // 75-byte SoftStep firmware-dump request (ss_firmware_update_request.syx): asks a
@@ -1645,6 +1677,19 @@ static std::string defaultOutDir(const std::string &familyId)
     return "bootloader-install-" + familyId + "-" + stamp;
 }
 
+// Best-effort directory creation (ignores "already exists" - callers don't
+// need to know which). POSIX mkdir(path, mode) vs. Windows _mkdir(path) (no
+// mode parameter) have different signatures, so this can't be a single
+// unconditional call the way most of this file's I/O is.
+static void makeDirectoryBestEffort(const std::string &path)
+{
+#if defined(_WIN32)
+    ::_mkdir(path.c_str());
+#else
+    ::mkdir(path.c_str(), 0755);
+#endif
+}
+
 static std::string trimUpper(const std::string &s)
 {
     std::string t = trimCopy(s);
@@ -1663,13 +1708,19 @@ int runBootloaderInstall(const CliOptions &options)
         return 1;
     }
 #if defined(_WIN32)
-    std::cout << "ERROR: --bootloader-install is not yet supported on Windows "
-                 "(the legacy trojan send path is CoreMIDI-only for now).\n";
-    return 1;
-#else
+    // Fail fast, before the interactive consent/validation steps below - see
+    // the matching check in runBlSend() for why WMS is required on Windows.
+    if (midiBackend::selectedApi() != RtMidi::WINDOWS_MIDI_SERVICES)
+    {
+        std::cout << "ERROR: the " << options.familyName << " bootloader upgrade requires Windows MIDI Services. "
+                     "You may need to download and install the SDK from "
+                     "https://microsoft.github.io/MIDI/get-latest/, then try again.\n";
+        return 1;
+    }
+#endif
     // Output directory + full-session log tee (captures all cout + user input).
     const std::string outDir = options.blOutDir.empty() ? defaultOutDir(fam) : options.blOutDir;
-    ::mkdir(outDir.c_str(), 0755);
+    makeDirectoryBestEffort(outDir);
     const std::string logPath = outDir + "/session.log";
     SessionLog log(logPath);
 
@@ -1774,10 +1825,14 @@ int runBootloaderInstall(const CliOptions &options)
     bl.portName.clear();
     bl.usePortNumber = false;
     bl.blPaddingScale = 1.0;             // byte-exact (proven)
-    bl.blFirstBlockToDataGapMs = 1000;   // macOS preset
+    bl.blFirstBlockToDataGapMs = 1000;   // proven on both macOS and Windows/WMS
     bl.blBlockToDataGapMs = 100;
     bl.blSectorGapMs = 100;
-    bl.blBankTransitionMs = 1000;
+#if defined(_WIN32)
+    bl.blBankTransitionMs = 100;         // Windows/WMS preset (approved 2026-08-25)
+#else
+    bl.blBankTransitionMs = 1000;        // macOS preset
+#endif
     bl.postDelayMs = 3000;
     bl.blBankProbe = false;
     bl.blProbeFirst = false;
@@ -1822,7 +1877,6 @@ int runBootloaderInstall(const CliOptions &options)
     std::cout << "Done. Firmware not loaded (bootloader is installed; you can run --fw-update SoftStep "
                  "any time).\n";
     return 0;
-#endif
 }
 
 int runManualProcess(const CliOptions &options)
@@ -1923,6 +1977,14 @@ int main(int argc, const char *argv[])
         printHelp();
         return 0;
     }
+
+    // Declared here (not inside an if) so it stays alive for whichever run*()
+    // branch below actually executes - see TimestampStreambuf's comment for
+    // why timestamping every line, including \r progress-bar redraws, is
+    // what's needed to diagnose real-hardware stall durations.
+    TimestampStreambuf timestampBuf(std::cout.rdbuf());
+    if (options.timestampOutput)
+        std::cout.rdbuf(&timestampBuf);
 
     std::string midiBackendError;
     if (!midiBackend::initialize(options.midiBackendOverride, midiBackendError))

@@ -24,6 +24,32 @@ const std::size_t MAX_MIDI_SYSEX_SIZE = 250000;
 // chunkedSysExTransfer.h's sendChunkedFileToPort(), used by both -f and
 // --fw-update) so there's one progress-bar implementation, not two drifting
 // copies.
+
+// True for the two ways a firmware send to a bootloader port can fail that
+// are ambiguous rather than definitely real failures - both traced to the
+// same real-hardware finding (2026-08-26, SoftStep): some bootloaders finish
+// writing/verifying and reboot back into application mode within the same
+// window we were waiting for a bootloader-port reply on, so the bootloader
+// port we were talking to is simply gone by the time we notice:
+//   - chunkedSysExTransfer.h's "no identity reply after the final chunk"
+//     (see its errorMessage assignment) - the reboot happened while we were
+//     still waiting for a reply on the (about to be stale) connection.
+//   - kmiDevice::openTransferOutputByName()'s "Exact MIDI output port not
+//     found" - the reboot already happened by the time a retry attempt (see
+//     chunkedSysExTransfer.h's sendChunkedFileWithRetry, up to 3 attempts)
+//     tried to reopen the now-nonexistent bootloader port.
+// Distinct from every other failure these can report (file read errors, a
+// mid-transfer chunk actually dropped, the port never existing in the first
+// place). Callers use this to decide whether to fall through to the existing
+// "wait for application to reconnect" confirmation instead of failing
+// outright - that loop makes the real call: if the device genuinely comes
+// back in application mode this was a success, and if it never does, it
+// already reports the accurate failure.
+bool isAmbiguousBootloaderPortLoss(const std::string &err)
+{
+    return err.find("(the final chunk)") != std::string::npos
+        || err.find("Exact MIDI output port not found") != std::string::npos;
+}
 }
 
 kmiDevice::kmiDevice(const std::string &familyId)
@@ -327,7 +353,13 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
             if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
-                return false;
+            {
+                if (!isAmbiguousBootloaderPortLoss(lastError_))
+                    return false;
+                std::cout << "No reply to the post-transfer identity check on the bootloader port - the "
+                             "device may have already finished and rebooted to application mode. "
+                             "Confirming via the application port...\n";
+            }
 
             firmwareSent = true;
             break;
@@ -379,7 +411,13 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
             if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
-                return false;
+            {
+                if (!isAmbiguousBootloaderPortLoss(lastError_))
+                    return false;
+                std::cout << "No reply to the post-transfer identity check on the bootloader port - the "
+                             "device may have already finished and rebooted to application mode. "
+                             "Confirming via the application port...\n";
+            }
 
             firmwareSent = true;
             break;
@@ -413,6 +451,41 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
                 peripheralSent = true;
             }
 
+            // Reconnecting in application mode is necessary but not
+            // sufficient - it only proves *some* application firmware is
+            // running, not that it's the version we just sent (a rejected/
+            // corrupt flash write could fall back to whatever was there
+            // before, if this bootloader supports that, or the update may
+            // simply not have landed despite the device coming back up).
+            // ensureCommsPortsForState() (called via refreshPorts() above)
+            // always re-opens the port and re-requests identity fresh when
+            // the active port name changes, so identityMetadata_ here
+            // reflects a live read, not stale pre-update data.
+            //
+            // Deliberately NOT using firmwareUpdatePending_ for this - bug
+            // found 2026-08-26 on real SoftStep hardware: --fw-update always
+            // calls setFwVersion()/setDefaultFwVersion() with forceUpdate =
+            // true (SendSysEx.cpp), and firmwareUpdatePending_ is defined as
+            // forceFirmwareUpdate_ || (version mismatch) - so with force
+            // always true, that flag is unconditionally true forever,
+            // regardless of whether the device's version actually now
+            // matches. Using it here made this check permanently fail even
+            // on a fully successful update (confirmed: device correctly
+            // reported 2.0.7 matching a requested 2.0.7, and this still
+            // reported a mismatch before the fix). The version_t equality
+            // operator already ignores the dev/build component by design
+            // (MIDI_device_metadata.hpp), so a direct comparison is exactly
+            // the "does the running version match" check needed here.
+            if (identityMetadata_.applicationVersion != requestedFwVersion_)
+            {
+                lastError_ = "Device reconnected in application mode, but its reported firmware version ("
+                           + versionToString(identityMetadata_.applicationVersion) + ") still does not match "
+                             "the requested version (" + versionToString(requestedFwVersion_) + ") - the update "
+                             "did not take effect.";
+                return false;
+            }
+
+            std::cout << "Confirmed application version: " << versionToString(identityMetadata_.applicationVersion) << "\n";
             return true;
         }
     }
