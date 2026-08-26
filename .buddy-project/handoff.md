@@ -23,6 +23,10 @@ MalletStation; KBP4 unchanged/confirmed). Four mechanisms, all in the tool + `da
 Also split `--help` into `--help` + `--help-bootloader`. New JSON fields are documented in
 `data/schemas/kmi_family.schema.json`. **Not yet validated on Windows** (see below).
 
+Additionally ported the legacy **`--bootloader-install` to 12 Step** (same trojan methodology as
+SoftStep; only device IDs differ). Validated end-to-end on a real v28 unit. See decisions.md
+"Legacy bootloader-trojan workflow" and current-task.md.
+
 ## Branch landscape (check before releasing — "a lot going on")
 
 - **`bootloader_ug`** (current, `840f09d` + this session's commit): the release-candidate line —
@@ -50,7 +54,7 @@ dist/         — Release zips and checksums (gitignored)
 - All CMake builds on macOS and Windows
 - WinMM and WMS backends (Windows): runtime probe with fallback; `--midi-backend` flag to force
 - Firmware update for: 12 Step, BopPad, K-Board, KBP4, MalletStation, MimicHub, QuNeo, QuNexus, SoftStep, SoundStation
-- SoftStep legacy bootloader-trojan workflow (`--bl-send`, `--bootloader-install`)
+- SoftStep + 12 Step legacy bootloader-trojan install (`--bl-send`, `--bootloader-install <family>`) — both hardware-validated (SoftStep v93, 12 Step v28)
 - Windows release packaging via `package-release.ps1`
 
 ## Key Files to Know

@@ -69,6 +69,18 @@ Main `--help` keeps only everyday flags plus `--bootloader-install`/`--bootloade
 trojan tooling (`--bl-send`, `--bl-decode`, `--send-bl-erase-reboot-cmd`, all the probe/gap/verify
 options) moved to `--help-bootloader`. Keep both in sync with the parser in `src/SendSysEx.cpp`.
 
-## Legacy SoftStep bootloader-trojan workflow
+## Legacy bootloader-trojan workflow (SoftStep + 12 Step)
 
-Pre-bootloader SoftStep units (original SSCOM hardware) cannot be updated via the normal path. `--bl-send` / `--bootloader-install` installs a one-time trojan payload that flashes a bootloader into the device, after which normal `--fw-update` works. This is a KMI-internal decision; the trojan `.syx` is in `syx/softstep/`.
+Pre-bootloader SoftStep (SSCOM-era) and pre-1.0.0 12 Step units cannot be updated via the normal
+path. `--bl-send` / `--bootloader-install <family>` installs a one-time trojan payload that flashes a
+bootloader into the device, after which normal `--fw-update` works. The trojan `.syx` files live in
+`syx/SoftStep/` and `syx/12Step/` and are registered as each family's `bootloader_installer_legacy`
+payload.
+
+**SoftStep and 12 Step use the same install methodology** (same era, same design) — the flow in
+`runBootloaderInstall`/`captureFirmwareDump` is family-parameterized and differs only by device IDs:
+the KMI manufacturer/PID header (SoftStep `1B 48 7A 01` vs 12 Step `01 55 7A 14`) used in the legacy
+version request, the firmware-dump request, and the dumped-image validation. Both are hardware-
+validated end-to-end (SoftStep on v93, 12 Step on v28). Adding another same-era family is mostly:
+register the trojan payload + a `legacy_application` port profile, add the family's header bytes to
+`runLegacyVersionQuery`/`captureFirmwareDump`, and un-gate `runBootloaderInstall`.

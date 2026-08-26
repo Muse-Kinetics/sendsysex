@@ -201,7 +201,7 @@ void printHelp()
         << "  --id-request <family>       Send an identity request, print the reply, and exit.\n"
         << "  --bootloader-install <family>  Guided legacy-bootloader (trojan) install: risk\n"
         << "                              prompt, connection + dump validation, install, verify,\n"
-        << "                              then offers to load the latest firmware. SoftStep only.\n"
+        << "                              then offers to load the latest firmware. SoftStep & 12 Step.\n"
         << "                              See --help-bootloader for details.\n"
         << "  -t <seconds>                Poll interval while waiting for the device to appear\n"
         << "                              or reboot.\n"
@@ -255,7 +255,7 @@ void printBootloaderHelp()
         << "                              inside a single F0...F7.\n"
         << "  --bootloader-install <fam>  Guided wrapper around --bl-send: risk prompt,\n"
         << "                              connection + dump validation, install, --verify, and an\n"
-        << "                              offer to load the latest firmware. SoftStep only.\n"
+        << "                              offer to load the latest firmware. SoftStep & 12 Step.\n"
         << "  --send-bl-erase-reboot-cmd  Send a double-EOF erase+reboot command to a KMI\n"
         << "                              bootloader. Requires --pid <pid> (decimal or 0x hex)\n"
         << "                              and -p/-n.\n"
@@ -1524,6 +1524,21 @@ static const unsigned char kSoftStepDumpRequest[] = {
     0x00, 0x30, 0xF7,
 };
 
+// 12 Step firmware-dump request (12s_firmware_update_request.syx). Byte-identical
+// to the SoftStep request except the 4-byte header (mfg + PID): 12 Step is
+// 01 55 7A 14 where SoftStep is 1B 48 7A 01 - the same relationship the legacy
+// version-request headers have (see runLegacyVersionQuery). Same methodology,
+// same era.
+static const unsigned char k12StepDumpRequest[] = {
+    0xF0, 0x00, 0x01, 0x55, 0x7A, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x33, 0x70,
+    0x00, 0x30, 0xF7,
+};
+
 // Duplicates everything written to std::cout into a log file, so the whole
 // session (all our output, and the helpers' output) is captured. User input read
 // via std::cin is logged separately (logInput), since cin doesn't pass through cout.
@@ -1567,7 +1582,22 @@ struct SessionLog
 // message was captured into out.
 static bool captureFirmwareDump(const std::string &familyId, std::vector<unsigned char> &out)
 {
-    if (familyId != "softstep")
+    const unsigned char *reqBytes = 0;
+    std::size_t reqLen = 0;
+    std::string marker;
+    if (familyId == "softstep")
+    {
+        reqBytes = kSoftStepDumpRequest;
+        reqLen = sizeof(kSoftStepDumpRequest);
+        marker = "SSCOM";
+    }
+    else if (familyId == "12step")
+    {
+        reqBytes = k12StepDumpRequest;
+        reqLen = sizeof(k12StepDumpRequest);
+        marker = "12";
+    }
+    else
         return false;
 
     struct DumpState
@@ -1592,7 +1622,7 @@ static bool captureFirmwareDump(const std::string &familyId, std::vector<unsigne
     RtMidiOut out_port(midiBackend::selectedApi());
     int outIdx = -1;
     for (unsigned int i = 0; i < out_port.getPortCount(); ++i)
-        if (out_port.getPortName(i).find("SSCOM") != std::string::npos) { outIdx = static_cast<int>(i); break; }
+        if (out_port.getPortName(i).find(marker) != std::string::npos) { outIdx = static_cast<int>(i); break; }
     if (outIdx < 0)
         return false;
     out_port.openPort(static_cast<unsigned int>(outIdx));
@@ -1613,7 +1643,7 @@ static bool captureFirmwareDump(const std::string &familyId, std::vector<unsigne
         catch (...) { delete in; }
     }
 
-    std::vector<unsigned char> req(kSoftStepDumpRequest, kSoftStepDumpRequest + sizeof(kSoftStepDumpRequest));
+    std::vector<unsigned char> req(reqBytes, reqBytes + reqLen);
     out_port.sendMessage(&req);
     for (int waited = 0; waited < 15000 && !state.done; waited += 20)
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -1661,11 +1691,23 @@ static std::string trimUpper(const std::string &s)
 int runBootloaderInstall(const CliOptions &options)
 {
     const std::string fam = normalizeFamilyId(options.familyName);
-    if (fam != "softstep")
+    if (fam != "softstep" && fam != "12step")
     {
-        std::cout << "ERROR: --bootloader-install currently supports SoftStep only "
+        std::cout << "ERROR: --bootloader-install currently supports SoftStep and 12 Step only "
                      "(got \"" << options.familyName << "\").\n";
         return 1;
+    }
+    // Display name + the legacy image's KMI manufacturer header, per family. The
+    // whole flow below is identical for both - they use the same trojan-install
+    // methodology and only differ in these device-specific identifiers.
+    std::string famDisplay = "SoftStep";
+    unsigned char hdrMfg0 = 0x1B, hdrMfg1 = 0x48, hdrMfg2 = 0x7A; // SoftStep
+    std::string legacyMarkerHint = "SSCOM-era";
+    if (fam == "12step")
+    {
+        famDisplay = "12 Step";
+        hdrMfg0 = 0x01; hdrMfg1 = 0x55; hdrMfg2 = 0x7A;           // 12 Step
+        legacyMarkerHint = "pre-1.0.0";
     }
 #if defined(_WIN32)
     // Fail fast, before the interactive consent/validation steps below - see
@@ -1684,15 +1726,15 @@ int runBootloaderInstall(const CliOptions &options)
     const std::string logPath = outDir + "/session.log";
     SessionLog log(logPath);
 
-    std::cout << "=== SoftStep Bootloader Install ===\n";
+    std::cout << "=== " << famDisplay << " Bootloader Install ===\n";
     std::cout << "Session log: " << logPath << "\n\n";
 
     // 1) Detect the legacy (pre-bootloader) unit and its firmware version.
     std::string ver;
     if (!runLegacyVersionQuery(fam, ver))
     {
-        std::cout << "ERROR: no legacy (pre-bootloader) SoftStep detected. Connect an SSCOM-era unit "
-                     "and try again.\n";
+        std::cout << "ERROR: no legacy (pre-bootloader) " << famDisplay << " detected. Connect a "
+                  << legacyMarkerHint << " unit and try again.\n";
         return 1;
     }
     if (ver.empty())
@@ -1755,14 +1797,16 @@ int runBootloaderInstall(const CliOptions &options)
         df.write(reinterpret_cast<const char *>(dump.data()), static_cast<std::streamsize>(dump.size()));
     }
     const bool dumpValid = dump.size() > 10 && dump.front() == 0xF0 && dump.back() == 0xF7 &&
-                           dump[1] == 0x00 && dump[2] == 0x1B && dump[3] == 0x48 && dump[4] == 0x7A;
+                           dump[1] == 0x00 && dump[2] == hdrMfg0 && dump[3] == hdrMfg1 && dump[4] == hdrMfg2;
     std::cout << "Captured " << dump.size() << " bytes -> " << dumpPath << "\n";
     if (!dumpValid)
     {
-        std::cout << "ERROR: captured image failed validation (expected F0 00 1B 48 7A ... F7). Aborting.\n";
+        char expected[48];
+        std::snprintf(expected, sizeof(expected), "F0 00 %02X %02X %02X ... F7", hdrMfg0, hdrMfg1, hdrMfg2);
+        std::cout << "ERROR: captured image failed validation (expected " << expected << "). Aborting.\n";
         return 1;
     }
-    std::cout << "Image validated (F0 ... F7, KMI SoftStep header present).\n";
+    std::cout << "Image validated (F0 ... F7, KMI " << famDisplay << " header present).\n";
 
     // 5) Install the trojan bootloader via --bl-send with the proven macOS timing
     //    preset and post-send --verify. Resolve the trojan from the family JSON.
@@ -1780,7 +1824,7 @@ int runBootloaderInstall(const CliOptions &options)
     CliOptions bl = options;
     bl.bootloaderInstall = false;
     bl.blSend = true;
-    bl.familyName = "SoftStep";
+    bl.familyName = famDisplay;
     bl.filePath = trojanPath;
     bl.portName.clear();
     bl.usePortNumber = false;
@@ -1831,11 +1875,11 @@ int runBootloaderInstall(const CliOptions &options)
         CliOptions fw = options;
         fw.bootloaderInstall = false;
         fw.automaticMode = true;
-        fw.familyName = "SoftStep"; // version defaults to the family's latest
+        fw.familyName = famDisplay; // version defaults to the family's latest
         return runAutomaticProcess(fw);
     }
-    std::cout << "Done. Firmware not loaded (bootloader is installed; you can run --fw-update SoftStep "
-                 "any time).\n";
+    std::cout << "Done. Firmware not loaded (bootloader is installed; you can run --fw-update "
+              << famDisplay << " any time).\n";
     return 0;
 }
 

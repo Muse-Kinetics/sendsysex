@@ -26,6 +26,20 @@ MIDI_CPP change**. Validated single-pass on real hardware for every attached dev
 See decisions.md for the four new mechanisms and *why*. Every JSON change carries an inline
 `notes[]` entry with the hardware finding.
 
+### Also this session — `--bootloader-install` ported to 12 Step (hardware-validated)
+
+`--bootloader-install 12step` now works end-to-end, identical methodology to SoftStep (same-era
+trojan install). Confirmed on a real v28 unit: legacy detection → consent gate → 5× version check →
+firmware-dump validation → trojan install → verify (rebooted into the 12 Step bootloader) → offer to
+load latest firmware. The port was straightforward — only the device-specific IDs differ:
+- Added `k12StepDumpRequest` (byte-identical to SoftStep's except header `01 55 7A 14`, from the
+  verified `12s_firmware_update_request.syx`).
+- Generalized `captureFirmwareDump` (family-selected request bytes + port marker) and
+  `runBootloaderInstall` (family display name, banner, dump-header validation, `--bl-send`/
+  `--fw-update` handoffs). Everything else was already generic: the `bootloader_installer_legacy`
+  payload (md5-verified trojan, 2 banks/98 sectors, all CRCs valid), the `legacy_application` port
+  profile, the version query, `familyFromImage`, and `--verify`.
+
 ### Priority Order (Next)
 1. **Windows validation** (owner/SiliconDreams-Windows): re-run `--fw-update` for each family on
    WMS and WinMM. The new JSON flags are read on all platforms; the `drain()` pacing is a no-op on
