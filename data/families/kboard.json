@@ -28,14 +28,19 @@
       "Without requiresFlushAfterPreamble, an affected command is silently no-op'd rather than rejected, which can look like a successful send that simply did nothing."
     ],
     "firmwareUpdateDefaults": {
-      "firstChunkSize": 64,
-      "firstGapDelayMs": 3000,
+      "firstChunkSize": 512,
+      "firstGapDelayMs": 1000,
       "chunkDelayMs": 150,
       "postDelayMs": 3000,
+      "idReplyTimeoutMs": 1000,
+      "idReplyResendAttempts": 7,
+      "appRebootMaxAttempts": 10,
       "rebootsToAppOnFinalChunk": true,
       "notes": [
         "The bootloader unconditionally erases the whole application region on the first valid firmware packet, blocking further USB service until that finishes - same behavior as KBP4, though K-Board tolerates a larger first window (64B vs KBP4's 32B) before an in-flight send itself starts failing mid-transmission.",
-        "K-Board reboots straight into application mode as it commits the final chunk and never answers an identity request in bootloader mode afterwards; the application-port reconnect and version check is the real success test."
+        "firstChunkSize raised to 512 (2026-08-27): the 64B window was a conservative guard; hardware testing shows 512B clears reliably. firstGapDelayMs reduced to 1000ms accordingly.",
+        "K-Board reboots straight into application mode as it commits the final chunk and never answers an identity request in bootloader mode afterwards; the application-port reconnect and version check is the real success test.",
+        "appRebootMaxAttempts=10: caps the application-mode reconnect wait at 10 seconds instead of the 60s hardcoded fallback."
       ]
     }
   },

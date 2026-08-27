@@ -53,6 +53,11 @@ public:
         // impossible - see kmiDevice::runAutomaticUpdate. Default false keeps
         // the strict version-match confirmation.
         bool confirmByAppReconnectOnly = false;
+        // How many 1-second poll iterations to allow when waiting for the
+        // device to return to application mode after a firmware transfer.
+        // 0 means "family JSON doesn't override this" — the hardcoded
+        // fallback (60) applies instead.
+        unsigned int appRebootMaxAttempts = 0;
     };
 
     deviceDatabase();

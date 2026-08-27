@@ -139,6 +139,7 @@ bool deviceDatabase::loadFamily(const std::string &familyId)
         firmwareUpdateDefaults_.confirmByAppReconnectOnly = fwDefaults.value("confirmByAppReconnectOnly", false);
         firmwareUpdateDefaults_.idReplyTimeoutMs = fwDefaults.value("idReplyTimeoutMs", 0U);
         firmwareUpdateDefaults_.idReplyResendAttempts = fwDefaults.value("idReplyResendAttempts", 0U);
+        firmwareUpdateDefaults_.appRebootMaxAttempts = fwDefaults.value("appRebootMaxAttempts", 0U);
     }
 
     for (const auto &m : root.at("discovery").at("familyMarkers"))

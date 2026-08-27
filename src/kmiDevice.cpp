@@ -426,7 +426,10 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
         }
     }
 
-    for (unsigned int attempt = 0; attempt < 60; ++attempt)
+    const unsigned int appRebootMaxAttempts = getFirmwareUpdateDefaults().appRebootMaxAttempts > 0
+                                              ? getFirmwareUpdateDefaults().appRebootMaxAttempts
+                                              : 60;
+    for (unsigned int attempt = 0; attempt < appRebootMaxAttempts; ++attempt)
     {
         std::cout << "Waiting " << pollIntervalSeconds << " second(s) for the device to return to application mode...\n";
         std::this_thread::sleep_for(std::chrono::seconds(pollIntervalSeconds));
