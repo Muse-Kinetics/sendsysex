@@ -85,8 +85,8 @@ roughly in order, before tagging:
    see blockers.md), then tag `vX.Y.Z` and `gh release create` (see commands.md).
 
 ### Standing items (not release-blocking)
-- macOS release packaging is undocumented (no `package-release.ps1` equivalent; Apple notarization
-  is a separate credential chain).
+- macOS release packaging is now scripted: `package-release-macos.sh` builds a universal, signed,
+  notarized, stapled `.dmg` (see `RELEASING.md` → macOS). First used for v0.14.0.
 - No automated tests — all validation is manual smoke-test on hardware.
 - EM Pro Riser shares MalletStation's EM1 firmware → will need `confirmByAppReconnectOnly` when it
   gets a `--fw-update` family entry.

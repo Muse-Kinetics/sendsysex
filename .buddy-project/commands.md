@@ -57,6 +57,23 @@ SendSysEx --midi-backend wms ...
 set KMI_MIDI_BACKEND=winmm
 ```
 
+## Release packaging (macOS - universal .dmg)
+
+```sh
+# Bump CMakeLists.txt VERSION + README.md first, then:
+KMI_NOTARY_PROFILE="<your-notary-profile>" ./package-release-macos.sh
+# -> dist/SendSysEx-vX.Y.Z-macos-universal.dmg (+ .sha256)
+# KMI_SKIP_NOTARIZE=1 for a signed-but-not-notarized local build.
+```
+
+Publish the macOS assets onto the existing release:
+
+```sh
+gh release upload vX.Y.Z \
+    dist/SendSysEx-vX.Y.Z-macos-universal.dmg \
+    dist/SendSysEx-vX.Y.Z-macos-universal.dmg.sha256
+```
+
 ## Release packaging (Windows only)
 
 ```powershell

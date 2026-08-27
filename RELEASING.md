@@ -86,7 +86,50 @@ Write release notes from the commits since the last tag
 
 ## macOS
 
-Not yet covered by `package-release.ps1` (Windows-only script; the exe/zip
-layout, signing, and notarization steps all differ). Build per the README's
-"Building with CMake" section and package manually if a macOS release is
-needed.
+macOS ships a **universal** (arm64 + x86_64) `.dmg`, built/signed/notarized/
+stapled by `package-release-macos.sh` - the counterpart to `package-release.ps1`.
+It always builds universal, so a single download runs on both Apple Silicon and
+Intel Macs.
+
+### Prerequisites
+
+- `brew install create-dmg`
+- Xcode command line tools (`codesign`, `xcrun notarytool`, `xcrun stapler`, `lipo`).
+- A **Developer ID Application** cert in the login keychain (signing).
+- A **notarytool keychain profile**, created once with
+  `xcrun notarytool store-credentials <profile-name> --apple-id <id> --team-id <team> --password <app-specific-password>`.
+  The Apple ID / app-specific password live in the keychain, never in this repo.
+  Pass the profile *name* to the script via `KMI_NOTARY_PROFILE`.
+
+### Build + sign + notarize + package
+
+```sh
+KMI_NOTARY_PROFILE="<your-notary-profile>" ./package-release-macos.sh
+```
+
+This bumps nothing (edit `CMakeLists.txt` + `README.md` first, step 1 above),
+then: builds universal Release, signs the binary with the hardened runtime + a
+secure timestamp, stages a `SendSysEx/` folder (binary + `data/` + `syx/` +
+`README.md` + `LICENSE`), builds a drag-to-Applications `.dmg`
+(`packaging/macos/dmg-background.tiff`, folder icon at 160,220 → Applications
+alias at 375,220, 530×380 window - same layout as the KMI editors), then signs,
+notarizes, staples, and validates the `.dmg`. Output:
+
+```
+dist/SendSysEx-vX.Y.Z-macos-universal.dmg
+dist/SendSysEx-vX.Y.Z-macos-universal.dmg.sha256
+```
+
+`KMI_SKIP_NOTARIZE=1` builds a signed-but-not-notarized dmg for local testing.
+Verify the finished artifact: `spctl -a -vvv -t open --context context:primary-signature dist/SendSysEx-vX.Y.Z-macos-universal.dmg`
+should report `accepted / source=Notarized Developer ID`.
+
+### Publish
+
+Add the macOS assets to the same GitHub release as the Windows zip:
+
+```sh
+gh release upload vX.Y.Z \
+    dist/SendSysEx-vX.Y.Z-macos-universal.dmg \
+    dist/SendSysEx-vX.Y.Z-macos-universal.dmg.sha256
+```

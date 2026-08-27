@@ -12,9 +12,13 @@ is expected — but it must be confirmed on real hardware over WMS and WinMM bef
 
 Windows releases must be signed with the KMI SafeNet token, which is physically at the office. Remote sessions cannot produce signed releases. **Unblocked by:** being at the office or arranging remote signing access.
 
-## macOS release packaging is undocumented / unscripted
+## macOS release packaging - RESOLVED (2026-08-27)
 
-There is no `package-release.ps1` equivalent for macOS. macOS signing requires Apple Developer notarization, which has a separate credential chain. **Needs:** someone to define and document the macOS release flow.
+macOS now has `package-release-macos.sh` (universal `.dmg`, sign → notarize →
+staple; the counterpart to `package-release.ps1`), documented in `RELEASING.md`
+→ macOS. Notarization uses a notarytool keychain profile whose name is passed via
+`KMI_NOTARY_PROFILE` (credential lives in the keychain, not the repo). First
+universal `.dmg` built for v0.14.0.
 
 ## README version header is stale
 

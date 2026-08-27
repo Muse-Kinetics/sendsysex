@@ -16,6 +16,26 @@ All firmware update timing (inter-chunk delay, ACK timeout, etc.) and device ide
 
 `project(SendSysEx VERSION X.Y.Z)` flows into `version.h` via `configure_file`. README and release zips derive from this. Do not hardcode the version anywhere else.
 
+## macOS release: universal `.dmg`, drag-to-Applications (editor-shaped)
+
+macOS releases ship a **universal** (arm64 + x86_64) `.dmg` built by
+`package-release-macos.sh` (the counterpart to `package-release.ps1`). Decisions:
+
+- **Always universal.** One download runs on both Apple Silicon and Intel. Built
+  with `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`.
+- **`.dmg`, not a `.zip`.** A bare CLI binary in a zip can't be stapled; a `.dmg`
+  can, so Gatekeeper validates offline. The layout mirrors the KMI editors (see
+  00_Editors/QuNexus): a single **`SendSysEx` folder** (binary + `data/` + `syx/`
+  + README + LICENSE) that the user drags onto an Applications alias, over a
+  background with a drag arrow (`packaging/macos/dmg-background.tiff`, folder icon
+  at 160,220 → Applications alias at 375,220, 530×380 window). Built with
+  Homebrew `create-dmg`.
+- **Sign → notarize → staple.** Binary signed with the Kesumo Developer ID
+  (hardened runtime + secure timestamp); the `.dmg` is signed, notarized via a
+  **notarytool keychain profile** (its name passed through `KMI_NOTARY_PROFILE` -
+  never committed), stapled, and validated. No Apple ID, app-specific password,
+  or profile name is stored in the repo. Full steps in `RELEASING.md` → macOS.
+
 ## Windows-only release packaging script
 
 `package-release.ps1` handles the Windows build/stage/zip/checksum workflow. macOS releases require a manual process (documented in README, no script yet). The repo lives in a Dropbox-synced folder, which caused Dropbox locking issues during zip — staging happens in a temp dir outside the repo to avoid this.
