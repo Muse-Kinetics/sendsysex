@@ -62,7 +62,9 @@ public:
                             unsigned int pollIntervalSeconds,
                             unsigned int postDelayMs = 500U,
                             unsigned int firstGapDelayMs = 0,
-                            unsigned int firstChunkSize = 0);
+                            unsigned int firstChunkSize = 0,
+                            unsigned int idReplyTimeoutMs = 300,
+                            unsigned int idReplyResendAttempts = 2);
 
     State getState() const;
     bool isFirmwareUpdatePending() const;
@@ -104,7 +106,9 @@ private:
                                unsigned int postDelayMs = 500U,
                                unsigned int firstGapDelayMs = 0,
                                unsigned int firstChunkSize = 0,
-                               bool finalChunkRebootsToApp = false);
+                               bool finalChunkRebootsToApp = false,
+                               unsigned int idReplyTimeoutMs = 300,
+                               unsigned int idReplyResendAttempts = 2);
     void processIncomingMessage(const std::vector<unsigned char> &message);
     void handleIdentityStateUpdate();
     void clearIdentityMetadata();

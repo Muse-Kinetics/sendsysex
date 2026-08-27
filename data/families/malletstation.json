@@ -21,7 +21,7 @@
       "bootloaderPidMsb": 1
     },
     "notes": [
-      "applicationPidMsb confirmed from EM1_uv5/USB/USB_Descriptor.h (PID 0x27, PID_MSB 0x00). bootloaderPidMsb is NOT yet hardware-confirmed - the bootloader's own source isn't present in the marimba_firmware repo (it's a vendored prebuilt binary), so this follows the same 0/1 convention used by other KMI families pending verification against a real device or the bootloader's own source."
+      "bootloaderPidMsb follows the standard 0/1 convention by assumption, not confirmed against real hardware or bootloader source (the bootloader ships only as a vendored prebuilt binary; source is unavailable)."
     ]
   },
   "transport": {
@@ -30,11 +30,9 @@
       "rebootsToAppOnFinalChunk": true,
       "confirmByAppReconnectOnly": true,
       "notes": [
-        "Applies the same two firmware-update settings its sibling KMI families need (see softstep.json / boppad.json / qunexus.json), PLUS confirmByAppReconnectOnly.",
-        "confirmByAppReconnectOnly (2026-08-26): MalletStation's application firmware (Marimba/Malletstation, EM1 branch - shared with EM Pro Riser) does NOT answer the standard Universal Device Inquiry (F0 7E 7F 06 01 F7). It has no 06 02 identity-reply handler at all; it reports version only via a proprietary OSC-over-SysEx '/fw/w/version' message (app_logic.c SendDeviceVersionInfo). So an identity request in application mode never replies and applicationVersion reads 0.0.0, which cannot match the requested version. Confirm the update by application-mode reconnect (detected by port name in refreshPorts, not an id reply) instead - the pre-version-match-check behavior. This was never noticed before the strict version-match confirmation was added (Windows pull 840f09d), because reconnecting in app mode was the only success signal. A device still stuck in the bootloader shows its bootloader port, so state_==connected still distinguishes success from failure.",
-        "firstGapDelayMs (5000): the bootloader erases its whole application region when it recognizes the first firmware packet, blocking USB until that finishes - so chunk 1's reply can't come within the 100ms steady-state -cd. Without this, the first send attempt times out on chunk 1 and only the retry (after the erase is already done) succeeds. 5000ms lets the FIRST attempt wait it out. It's a return-early timeout (spent only if the reply is genuinely slow), so the generous value has no steady-state cost; confirm the real erase duration with --timestamp and tighten if desired.",
-        "rebootsToAppOnFinalChunk (true): MalletStation reboots straight into application mode as it commits the final chunk, so it never answers an identity request on the bootloader port afterwards. Skip the doomed final-chunk handshake and let runAutomaticUpdate's application-port reconnect + version check be the success test.",
-        "chunkDelayMs/postDelayMs left at CLI defaults (100/500). Validated on real hardware 2026-08-26."
+        "The application firmware does not answer a standard Universal Device Inquiry - it reports version only via a proprietary OSC-over-SysEx message. Confirm a successful update by application-mode reconnect (by port name) rather than a version-matched identity reply.",
+        "The bootloader erases its whole application region when it recognizes the first firmware packet, blocking USB until that finishes, so chunk 1's reply needs extra grace beyond the steady-state delay.",
+        "MalletStation reboots straight into application mode as it commits the final chunk and never answers an identity request on the bootloader port afterwards."
       ]
     }
   },
@@ -67,7 +65,7 @@
       "default": true,
       "latest": true,
       "notes": [
-        "Chunk-safe (-cs512) packaging via Hex_to_SysEx, paired with bootloader v1.0.3. Built and version-matched to EM1_uv5/Main/version.h 2026-07-29; not yet hardware-validated (see marimba_firmware's .buddy-project/blockers.md)."
+        "Chunk-safe (-cs512) packaging via Hex_to_SysEx, paired with bootloader v1.0.3."
       ]
     }
   ],

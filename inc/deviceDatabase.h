@@ -27,6 +27,16 @@ public:
         unsigned int firstGapDelayMs = 0;
         unsigned int chunkDelayMs = 0;
         unsigned int postDelayMs = 0;
+        // Per-attempt identity-reply wait budget, and how many additional
+        // times to resend the request and wait again if a chunk stays
+        // silent, before the chunk (and then the whole transfer) is
+        // considered failed. 0 for either means "family JSON doesn't
+        // override this," matching the all-zero-default convention above -
+        // the CLI's own --id-reply-timeout/--id-reply-resend-attempts
+        // defaults apply instead. See chunkedSysExTransfer.h's 2026-08-25
+        // redesign notes.
+        unsigned int idReplyTimeoutMs = 0;
+        unsigned int idReplyResendAttempts = 0;
         // When true, the device reboots straight into application mode as it
         // commits the final firmware chunk, so it never answers an identity
         // request on the bootloader port afterwards. The chunked sender skips

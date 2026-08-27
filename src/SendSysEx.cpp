@@ -45,6 +45,19 @@ const unsigned int DEFAULT_CHUNK_SIZE = 512;
 const unsigned int DEFAULT_CHUNK_DELAY_MS = 100;
 const unsigned int DEFAULT_POLL_SECONDS = 1;
 
+// Per-attempt identity-reply wait budget, and how many additional times to
+// resend the request and wait again after a silent chunk, before the chunk
+// (and then the whole transfer, via sendChunkedFileWithRetry) is considered
+// failed. Split 2026-08-25 out of chunkDelayMs, which used to do triple duty
+// (inter-chunk pacing, reply-wait budget, and a fixed internal 300ms resend
+// cadence) - see chunkedSysExTransfer.h's redesign notes. These starting
+// defaults (300ms x 3 total attempts = up to 900ms of pure reply-waiting per
+// chunk, worst case) are a guess, not yet hardware-validated for any family;
+// tune per-family via quneo.json etc.'s idReplyTimeoutMs/idReplyResendAttempts,
+// or per-run via --id-reply-timeout/--id-reply-resend-attempts.
+const unsigned int DEFAULT_ID_REPLY_TIMEOUT_MS = 300;
+const unsigned int DEFAULT_ID_REPLY_RESEND_ATTEMPTS = 2;
+
 struct CliOptions
 {
     bool listPortsOnly = false;
@@ -66,10 +79,14 @@ struct CliOptions
     unsigned int postDelayMs = 500U;
     unsigned int firstGapDelayMs = 0U;
     unsigned int firstChunkSize = 0U;
+    unsigned int idReplyTimeoutMs = DEFAULT_ID_REPLY_TIMEOUT_MS;
+    unsigned int idReplyResendAttempts = DEFAULT_ID_REPLY_RESEND_ATTEMPTS;
     bool postDelayMsExplicit = false;
     bool firstGapDelayMsExplicit = false;
     bool firstChunkSizeExplicit = false;
     bool chunkDelayMsExplicit = false;
+    bool idReplyTimeoutMsExplicit = false;
+    bool idReplyResendAttemptsExplicit = false;
     bool blEraseRebootCmd = false;
     int blPid = -1;
     std::string appPortName;
@@ -212,7 +229,16 @@ void printHelp()
         << "  -fgd, --first-gap-delay <ms>  Delay after the first chunk only (default: 0 = use\n"
         << "                              -cd), for receivers that start a blocking op (e.g. a\n"
         << "                              flash erase) on the first chunk.\n"
-        << "  -cd, --chunk-delay <ms>     Delay between chunks (default: 100).\n"
+        << "  -cd, --chunk-delay <ms>     Minimum wait after sending a chunk, before asking\n"
+        << "                              for its identity reply (default: 100). Pure pacing -\n"
+        << "                              does not affect how long a reply is waited for.\n"
+        << "  -irt, --id-reply-timeout <ms>  How long one identity-request attempt waits for a\n"
+        << "                              reply before it's considered silent (default: 300).\n"
+        << "  -irr, --id-reply-resend-attempts <n>  How many additional times to resend the\n"
+        << "                              identity request and wait --id-reply-timeout again\n"
+        << "                              after a silent chunk, before the chunk (and then the\n"
+        << "                              whole transfer) is considered failed (default: 2, i.e.\n"
+        << "                              3 total attempts).\n"
         << "  -pd, --post-delay <ms>      Wait after the last chunk before closing the port\n"
         << "                              (default: 500; 0 disables). Prevents F7 loss.\n"
         << "\nGlobal options:\n"
@@ -225,8 +251,8 @@ void printHelp()
         << "\nNotes:\n"
         << "  - Raw send uses RtMidi directly and does not normalize port names.\n"
         << "  - A raw send of a multi-message (chunked) file sends each F0...F7 whole; between\n"
-        << "    chunks -cd is the id-reply handshake timeout (an id request must be answered\n"
-        << "    before the next chunk). Single-message files are sent as-is, no handshake.\n\n";
+        << "    chunks an id request must be answered (see -irt/-irr) before the next chunk.\n"
+        << "    Single-message files are sent as-is, no handshake.\n\n";
 }
 
 void printBootloaderHelp()
@@ -350,7 +376,9 @@ bool sendFileToPort(RtMidiOut &midiOut,
                     unsigned int postDelayMs,
                     std::string &errorMessage,
                     unsigned int firstGapDelayMs,
-                    unsigned int firstChunkSize)
+                    unsigned int firstChunkSize,
+                    unsigned int idReplyTimeoutMs,
+                    unsigned int idReplyResendAttempts)
 {
     try
     {
@@ -408,7 +436,7 @@ bool sendFileToPort(RtMidiOut &midiOut,
                     try { retryOut->closePort(); } catch (...) {}
                 }
             },
-            errorMessage, firstGapDelayMs, firstChunkSize);
+            errorMessage, firstGapDelayMs, firstChunkSize, false, idReplyTimeoutMs, idReplyResendAttempts);
 
         return sent;
     }
@@ -551,6 +579,40 @@ CliOptions parseArguments(int argc, const char *argv[])
                 return options;
             }
             options.chunkDelayMsExplicit = true;
+            continue;
+        }
+        if (arg == "-irt" || arg == "--id-reply-timeout")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --id-reply-timeout.";
+                return options;
+            }
+
+            if (!parseUnsignedOption(argv[++i], options.idReplyTimeoutMs))
+            {
+                options.parseError = "Invalid id-reply timeout.";
+                return options;
+            }
+            options.idReplyTimeoutMsExplicit = true;
+            continue;
+        }
+        if (arg == "-irr" || arg == "--id-reply-resend-attempts")
+        {
+            if (i + 1 >= argc)
+            {
+                options.showHelp = true;
+                options.parseError = "Missing value for --id-reply-resend-attempts.";
+                return options;
+            }
+
+            if (!parseUnsignedOption(argv[++i], options.idReplyResendAttempts))
+            {
+                options.parseError = "Invalid id-reply resend attempt count.";
+                return options;
+            }
+            options.idReplyResendAttemptsExplicit = true;
             continue;
         }
         if (arg == "-fcs" || arg == "--first-chunk-size")
@@ -1132,6 +1194,8 @@ int runAutomaticProcess(const CliOptions &options)
     unsigned int firstGapDelayMs = options.firstGapDelayMs;
     unsigned int postDelayMs = options.postDelayMs;
     unsigned int chunkDelayMs = options.chunkDelayMs;
+    unsigned int idReplyTimeoutMs = options.idReplyTimeoutMs;
+    unsigned int idReplyResendAttempts = options.idReplyResendAttempts;
     if (!options.firstChunkSizeExplicit && familyFwDefaults.firstChunkSize > 0U)
         firstChunkSize = familyFwDefaults.firstChunkSize;
     if (!options.firstGapDelayMsExplicit && familyFwDefaults.firstGapDelayMs > 0U)
@@ -1140,8 +1204,12 @@ int runAutomaticProcess(const CliOptions &options)
         postDelayMs = familyFwDefaults.postDelayMs;
     if (!options.chunkDelayMsExplicit && familyFwDefaults.chunkDelayMs > 0U)
         chunkDelayMs = familyFwDefaults.chunkDelayMs;
+    if (!options.idReplyTimeoutMsExplicit && familyFwDefaults.idReplyTimeoutMs > 0U)
+        idReplyTimeoutMs = familyFwDefaults.idReplyTimeoutMs;
+    if (!options.idReplyResendAttemptsExplicit && familyFwDefaults.idReplyResendAttempts > 0U)
+        idReplyResendAttempts = familyFwDefaults.idReplyResendAttempts;
 
-    if (!device.runAutomaticUpdate(options.chunkSize, chunkDelayMs, options.pollSeconds, postDelayMs, firstGapDelayMs, firstChunkSize))
+    if (!device.runAutomaticUpdate(options.chunkSize, chunkDelayMs, options.pollSeconds, postDelayMs, firstGapDelayMs, firstChunkSize, idReplyTimeoutMs, idReplyResendAttempts))
     {
         std::cout << "ERROR: " << device.getLastError() << "\n";
         return 1;
@@ -1933,7 +2001,7 @@ int runManualProcess(const CliOptions &options)
         }
 
         std::string errorMessage;
-        if (!sendFileToPort(midiOut, portNumber, options.filePath, options.chunkSize, options.chunkDelayMs, options.postDelayMs, errorMessage, options.firstGapDelayMs, options.firstChunkSize))
+        if (!sendFileToPort(midiOut, portNumber, options.filePath, options.chunkSize, options.chunkDelayMs, options.postDelayMs, errorMessage, options.firstGapDelayMs, options.firstChunkSize, options.idReplyTimeoutMs, options.idReplyResendAttempts))
         {
             std::cout << "ERROR: " << errorMessage << "\n";
             return 1;
@@ -2008,6 +2076,8 @@ int main(int argc, const char *argv[])
 
     std::cout << "Chunk size: " << options.chunkSize << " bytes, delay: " << options.chunkDelayMs
               << " ms, post-delay: " << options.postDelayMs << " ms\n";
+    std::cout << "Id-reply timeout: " << options.idReplyTimeoutMs << " ms, resend attempts: "
+              << options.idReplyResendAttempts << " (family JSON may override either below)\n";
 
     if (options.listNormalizedOnly && options.filePath.empty() && options.versionText.empty())
         return runManualProcess(options);

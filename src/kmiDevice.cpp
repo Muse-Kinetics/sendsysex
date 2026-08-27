@@ -284,7 +284,9 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
                                    unsigned int pollIntervalSeconds,
                                    unsigned int postDelayMs,
                                    unsigned int firstGapDelayMs,
-                                   unsigned int firstChunkSize)
+                                   unsigned int firstChunkSize,
+                                   unsigned int idReplyTimeoutMs,
+                                   unsigned int idReplyResendAttempts)
 {
     if (!requestedFwVersionValid_)
     {
@@ -352,7 +354,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize, getFirmwareUpdateDefaults().rebootsToAppOnFinalChunk))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize, getFirmwareUpdateDefaults().rebootsToAppOnFinalChunk, idReplyTimeoutMs, idReplyResendAttempts))
             {
                 if (!isAmbiguousBootloaderPortLoss(lastError_))
                     return false;
@@ -387,12 +389,12 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
         // relay is no longer available.
         if (hasPeripheralFirmware && !peripheralSent)
         {
-            if (!sendPayloadFileToPort(peripheralPath, applicationPort, chunkSize, chunkDelayMs, "peripheral firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
+            if (!sendPayloadFileToPort(peripheralPath, applicationPort, chunkSize, chunkDelayMs, "peripheral firmware", postDelayMs, firstGapDelayMs, firstChunkSize, false, idReplyTimeoutMs, idReplyResendAttempts))
                 return false;
             peripheralSent = true;
         }
 
-        if (!sendPayloadFileToPort(bootloaderEntryPath, applicationPort, chunkSize, chunkDelayMs, "bootloader-entry", postDelayMs))
+        if (!sendPayloadFileToPort(bootloaderEntryPath, applicationPort, chunkSize, chunkDelayMs, "bootloader-entry", postDelayMs, 0, 0, false, idReplyTimeoutMs, idReplyResendAttempts))
             return false;
 
         while (true)
@@ -410,7 +412,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             // WinMM: allow handles to fully release and the bootloader to finish
             // any in-flight data before we open a new output port.
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize, getFirmwareUpdateDefaults().rebootsToAppOnFinalChunk))
+            if (!sendPayloadFileToPort(firmwarePath, bootloaderPort, chunkSize, chunkDelayMs, "firmware", postDelayMs, firstGapDelayMs, firstChunkSize, getFirmwareUpdateDefaults().rebootsToAppOnFinalChunk, idReplyTimeoutMs, idReplyResendAttempts))
             {
                 if (!isAmbiguousBootloaderPortLoss(lastError_))
                     return false;
@@ -446,7 +448,7 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
             {
                 const std::string applicationPort = activeOutputPortName_;
                 disconnect();
-                if (!sendPayloadFileToPort(peripheralPath, applicationPort, chunkSize, chunkDelayMs, "peripheral firmware", postDelayMs, firstGapDelayMs, firstChunkSize))
+                if (!sendPayloadFileToPort(peripheralPath, applicationPort, chunkSize, chunkDelayMs, "peripheral firmware", postDelayMs, firstGapDelayMs, firstChunkSize, false, idReplyTimeoutMs, idReplyResendAttempts))
                     return false;
                 peripheralSent = true;
             }
@@ -1046,7 +1048,9 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
                                       unsigned int postDelayMs,
                                       unsigned int firstGapDelayMs,
                                       unsigned int firstChunkSize,
-                                      bool finalChunkRebootsToApp)
+                                      bool finalChunkRebootsToApp,
+                                      unsigned int idReplyTimeoutMs,
+                                      unsigned int idReplyResendAttempts)
 {
     std::vector<unsigned char> bytes;
     if (!readBinaryFile(filePath, bytes, &lastError_))
@@ -1074,7 +1078,8 @@ bool kmiDevice::sendPayloadFileToPort(const std::string &filePath,
             return openTransferOutputByName(portName) ? transferOut_ : 0;
         },
         [this]() { closeTransferPort(); },
-        lastError_, firstGapDelayMs, firstChunkSize, finalChunkRebootsToApp);
+        lastError_, firstGapDelayMs, firstChunkSize, finalChunkRebootsToApp,
+        idReplyTimeoutMs, idReplyResendAttempts);
 }
 
 void kmiDevice::processIncomingMessage(const std::vector<unsigned char> &message)

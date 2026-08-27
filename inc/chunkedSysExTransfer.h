@@ -14,8 +14,20 @@
 //  identical, hardware-validated protocol rather than two independent
 //  reimplementations drifting apart. See kboard-perf-test-design.md and
 //  mk_firmware_tester's decisions.md (2026-07-16 entries) for the
-//  reliability fixes baked in here (post-chunk delay, periodic ID-request
-//  resend) and why they were needed.
+//  reliability fixes baked in here and why they were needed.
+//
+//  Per-chunk reply handshake (2026-08-25 redesign): --chunk-delay is pure
+//  inter-chunk pacing (a minimum wait after sending a chunk, before asking
+//  for its reply); --id-reply-timeout is how long one identity-request
+//  attempt waits for a reply; --id-reply-resend-attempts is how many times
+//  a silent chunk gets re-asked (each a fresh --id-reply-timeout-long wait)
+//  before the chunk is declared lost. If every attempt comes back empty,
+//  the whole file is resent from chunk 0 (SysEx can't resume mid-message) -
+//  that outer retry is unchanged and lives in sendChunkedFileWithRetry
+//  below. Previously a single chunkDelayMs value did all three jobs at
+//  once (pacing, budget, AND a fixed 300ms internal resend cadence),
+//  which meant tuning any one of them for a specific device (see QuNeo's
+//  real-hardware failures, 2026-08-25) distorted the others.
 //
 //  SPDX-License-Identifier: MIT
 //
@@ -99,33 +111,34 @@ inline void chunkReplyCallback(double /*timeStamp*/, std::vector<unsigned char> 
         state->received = true;
 }
 
-// Sends a Universal Non-Realtime Device Inquiry (F0 7E 7F 06 01 F7) and waits
-// up to waitMs for any SysEx reply (delivered via chunkReplyCallback).
-//
-// A single request/reply round trip occasionally gets lost (either direction)
-// without the device actually being unresponsive - observed in practice as a
-// chunk aborting a transfer even though the target board answers fine
-// immediately afterward. Re-send the request periodically within the waitMs
-// budget instead of a single fire-and-wait, so one dropped packet doesn't
-// abort an otherwise-healthy transfer.
-inline bool waitForIdReply(RtMidiOut &midiOut, ChunkReplyState &state, unsigned int waitMs)
+// Sends a Universal Non-Realtime Device Inquiry (F0 7E 7F 06 01 F7) once and
+// waits up to waitMs for any SysEx reply (delivered via chunkReplyCallback).
+// Exactly one request goes out per call - no internal resend. Retrying a
+// no-reply chunk (send another request, wait again) is the caller's job now
+// (see the attempt loop in sendChunkedFileToPort), driven by explicit,
+// separately-tunable --id-reply-timeout / --id-reply-resend-attempts values
+// instead of a fixed, baked-in 300ms resend cadence folded into a single
+// opaque wait - real QuNeo hardware showed the old single "chunkDelayMs
+// doubles as the whole reply-wait-plus-resend budget" design made it
+// impossible to raise the retry count without also stretching (or shrinking)
+// every healthy chunk's steady-state pacing, and vice versa (2026-08-25).
+inline bool waitForIdReplyOnce(RtMidiOut &midiOut, ChunkReplyState &state, unsigned int waitMs)
 {
     static const std::vector<unsigned char> idRequest = {0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7};
     state.received = false;
 
     const unsigned int pollIntervalMs = 5;
-    const unsigned int resendIntervalMs = 300;
 
-    // Real-hardware finding (2026-08-26, SoftStep, WMS): waited/sinceLastSend
-    // used to be naive counters incremented by a fixed pollIntervalMs per
-    // loop iteration, on the assumption each iteration costs exactly that
-    // much wall-clock time. It doesn't - midiOut.sendMessage() itself can
-    // block for far longer than 5ms (observed: a 3000ms-budget wait actually
-    // took ~9.4s wall-clock, --timestamp made this visible), and that extra
-    // time was invisible to the counters, silently blowing well past the
+    // Real-hardware finding (2026-08-26, SoftStep, WMS): elapsed time used to
+    // be a naive counter incremented by a fixed pollIntervalMs per loop
+    // iteration, on the assumption each iteration costs exactly that much
+    // wall-clock time. It doesn't - midiOut.sendMessage() itself can block
+    // for far longer than 5ms (observed: a 3000ms-budget wait actually took
+    // ~9.4s wall-clock, --timestamp made this visible), and that extra time
+    // was invisible to the counter, silently blowing well past the
     // configured budget. Measuring against steady_clock instead makes the
     // actual elapsed time match what was asked for, regardless of how long
-    // any individual sendMessage() call takes.
+    // the sendMessage() call itself takes.
     //
     // Regression fixed 2026-08-26 (SoftStep, CoreMIDI): drain() after the send,
     // then sample 'start'. On CoreMIDI sendMessage() is asynchronous - it queues
@@ -139,13 +152,10 @@ inline bool waitForIdReply(RtMidiOut &midiOut, ChunkReplyState &state, unsigned 
     // 100 ms" on a chunk the board answered promptly). drain() blocks until the
     // request is genuinely on the wire, so waitMs then measures a real reply
     // window. On Windows drain() is a no-op (MidiOutWinMM/WMS inherit the base
-    // no-op), so this is a no-op there. (Per-resend blocking time inside the
-    // loop is still measured from 'start' - that accurate accounting is what
-    // prevents the long-budget balloon above, and is unchanged.)
+    // no-op), so this is a no-op there.
     midiOut.sendMessage(&idRequest);
     midiOut.drain();
     const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point lastSend = start;
 
     while (!state.received)
     {
@@ -155,19 +165,67 @@ inline bool waitForIdReply(RtMidiOut &midiOut, ChunkReplyState &state, unsigned 
             break;
 
         std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
-        if (state.received)
-            break;
-
-        const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-        const long long sinceLastSendMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSend).count();
-        const long long totalElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-        if (sinceLastSendMs >= static_cast<long long>(resendIntervalMs) && totalElapsedMs < static_cast<long long>(waitMs))
-        {
-            midiOut.sendMessage(&idRequest);
-            lastSend = std::chrono::steady_clock::now();
-        }
     }
     return state.received;
+}
+
+// Sends the identity request and waits up to replyWaitMs for a reply, and if
+// that first attempt gets nothing, resends and waits again - up to
+// resendAttempts additional times (so resendAttempts=2 means 3 total
+// requests: 1 initial + 2 resends). Each attempt is a fresh, independent
+// waitForIdReplyOnce() call with its own full replyWaitMs budget. Returns
+// true as soon as any attempt gets a reply.
+//
+// Logging is gated to the LAST TWO attempts only (plus the very first,
+// silent-on-success check). With a generous resend count - e.g. QuNeo's
+// real-hardware USB-FIFO race (2026-08-25 investigation) needing
+// --id-reply-resend-attempts 6+ to reliably recover - most chunks fail their
+// first attempt or two and recover on a routine resend; printing every one
+// of those floods the log with expected, non-actionable noise (one 3-line
+// block per recovered chunk, every few chunks, for a 295+ chunk transfer).
+// Only a chunk that has burned through all but its last attempt or two -
+// i.e. is genuinely at risk of the whole transfer aborting - gets logged,
+// which is the situation an operator actually needs to see. Earlier silent
+// attempts still count against resendAttempts as normal; only their output
+// is suppressed.
+inline bool waitForIdReplyWithResends(RtMidiOut &midiOut, ChunkReplyState &state,
+                                      unsigned int replyWaitMs, unsigned int resendAttempts,
+                                      std::size_t chunkNumber, std::size_t totalChunks)
+{
+    const unsigned int totalTries = resendAttempts + 1;
+    const unsigned int firstLoggedAttempt = (totalTries > 2) ? (totalTries - 1) : 1;
+    bool printedAnything = false;
+
+    for (unsigned int attempt = 1; attempt <= totalTries; ++attempt)
+    {
+        const bool gotReply = waitForIdReplyOnce(midiOut, state, replyWaitMs);
+
+        if (attempt == 1 && gotReply)
+            return true; // silent happy path - caller prints "reply OK (N left)"
+
+        const bool logThisAttempt = attempt >= firstLoggedAttempt;
+
+        if (gotReply)
+        {
+            if (logThisAttempt)
+                std::cout << (printedAnything ? "  " : "\n  ") << "chunk " << chunkNumber << "/" << totalChunks
+                          << ": reply received on resend (attempt " << attempt << "/" << totalTries << ")\n";
+            return true;
+        }
+
+        if (logThisAttempt)
+        {
+            std::cout << (printedAnything ? "  " : "\n  ") << "chunk " << chunkNumber << "/" << totalChunks
+                      << ": " << (printedAnything ? "still " : "") << "NO REPLY within " << replyWaitMs
+                      << " ms (attempt " << attempt << "/" << totalTries << ")\n";
+            printedAnything = true;
+
+            if (attempt < totalTries)
+                std::cout << "  chunk " << chunkNumber << "/" << totalChunks
+                          << ": resending id request (attempt " << (attempt + 1) << "/" << totalTries << ")...\n";
+        }
+    }
+    return false;
 }
 
 // Sends every detected chunk in order. For files with more than one chunk, an
@@ -231,7 +289,9 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                                   std::string &errorMessage,
                                   unsigned int firstGapDelayMs = 0,
                                   unsigned int firstChunkSize = 0,
-                                  bool finalChunkRebootsToApp = false)
+                                  bool finalChunkRebootsToApp = false,
+                                  unsigned int idReplyTimeoutMs = 300,
+                                  unsigned int idReplyResendAttempts = 2)
 {
     if (chunks.empty())
     {
@@ -370,22 +430,30 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
             // the chunk before demanding a reply - firing the ID request
             // immediately risks it landing while the chunk's tail end is
             // still being handled on the device side and getting missed.
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // This is -cd/--chunk-delay's whole job now: a minimum wait
+            // between sending a chunk and demanding its reply (previously a
+            // fixed, non-configurable 50ms - made tunable 2026-08-25 after
+            // chunkDelayMs was split from the reply-wait budget below, since
+            // some receivers settle faster or slower than 50ms and there was
+            // no way to adjust just this without also changing how long a
+            // reply was waited for).
+            if (chunkDelayMs > 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(chunkDelayMs));
 
-            // The reply-wait budget itself also needs to match whichever
-            // grace period this specific chunk's *send* used, not always
-            // chunkDelayMs - found 2026-08-18 from a real transfer that
-            // failed at chunk 1 (used firstChunkSize/firstGapDelayMs because
-            // the receiver needs it) and separately at the final chunk,
-            // both with "NO REPLY within 150ms" (chunkDelayMs) even though
-            // -fgd 3000/-pd 3000 had been explicitly passed for exactly
-            // this reason. Chunk 0's sub-split gap already waits
-            // firstGapDelayMs *between* its windows for the same receiver
-            // behavior - the reply wait right after it needs at least that
-            // much grace too, not the steady-state inter-chunk delay. The
-            // final chunk is the same idea: postDelayMs exists specifically
-            // because the receiver may need extra time (write/verify/
-            // reboot-prep) after the last chunk before it can talk again.
+            // The reply-wait budget (per attempt) also needs to match
+            // whichever grace period this specific chunk's *send* used, not
+            // always idReplyTimeoutMs - found 2026-08-18 from a real transfer
+            // that failed at chunk 1 (used firstChunkSize/firstGapDelayMs
+            // because the receiver needs it) and separately at the final
+            // chunk, both with "NO REPLY" even though -fgd 3000/-pd 3000 had
+            // been explicitly passed for exactly this reason. Chunk 0's
+            // sub-split gap already waits firstGapDelayMs *between* its
+            // windows for the same receiver behavior - the reply wait right
+            // after it needs at least that much grace too, not the
+            // steady-state --id-reply-timeout. The final chunk is the same
+            // idea: postDelayMs exists specifically because the receiver may
+            // need extra time (write/verify/reboot-prep) after the last
+            // chunk before it can talk again.
             //
             // Bug fixed 2026-08-26 (real SoftStep hardware): this used to
             // additionally require firstChunkSize > 0 && firstChunkSize <
@@ -398,10 +466,20 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
             // packaging - chunk 0 as small as 38 bytes) never needs
             // firstChunkSize sub-splitting at all, so that old condition was
             // always false and firstGapDelayMs from softstep.json's
-            // firmwareUpdateDefaults was silently never applied - reply wait
-            // after chunk 0 stayed at chunkDelayMs (100ms) regardless of what
-            // the JSON said, reproducing the exact "NO REPLY within 100 ms"
-            // failure the JSON fix was supposed to prevent.
+            // firmwareUpdateDefaults was silently never applied.
+            //
+            // Split 2026-08-25 from a single chunkDelayMs doing triple duty
+            // (inter-chunk pacing, reply-wait budget, AND a baked-in 300ms
+            // resend cadence) into three independent knobs after real QuNeo
+            // hardware showed that design couldn't be tuned for one purpose
+            // without distorting the others: --chunk-delay is pure pacing
+            // (above), --id-reply-timeout is this per-attempt reply budget,
+            // and --id-reply-resend-attempts (used below) controls how many
+            // times a silent chunk gets re-asked before the whole transfer
+            // is considered failed and the coarse-grained retry
+            // (sendChunkedFileWithRetry, resend-the-whole-file-from-chunk-0)
+            // takes over - SysEx has no mid-message resume, so that outer
+            // retry has always meant starting over, and still does.
             const bool isFirstChunk = (i == 0);
             const bool isLastChunk = (i + 1 == chunks.size());
 
@@ -422,13 +500,14 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                 continue;
             }
 
-            unsigned int replyWaitMs = chunkDelayMs;
+            unsigned int replyWaitMs = idReplyTimeoutMs;
             if (isFirstChunk)
                 replyWaitMs = std::max(replyWaitMs, firstGapDelayMs);
             if (isLastChunk)
                 replyWaitMs = std::max(replyWaitMs, postDelayMs);
 
-            if (waitForIdReply(midiOut, replyState, replyWaitMs))
+            if (waitForIdReplyWithResends(midiOut, replyState, replyWaitMs, idReplyResendAttempts,
+                                          i + 1, chunks.size()))
             {
                 // Folded into the same in-place bar line (printProgress just
                 // left the cursor right after it, mid-transfer) rather than a
@@ -437,9 +516,10 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
                 // with one scrollback line per chunk instead of one steadily
                 // updating line. Padded to a fixed width so a shorter later
                 // redraw can't leave stray trailing characters from a longer
-                // earlier one. Real failures below still get a permanent,
-                // newline-broken line - that visibility is what surfaced the
-                // 2026-08-25 SoftStep timing issue and must not be lost.
+                // earlier one. Real failures above still get permanent,
+                // newline-broken lines (one per attempt) - that visibility is
+                // what surfaced the 2026-08-25 SoftStep timing issue and must
+                // not be lost.
                 std::string suffix = "  reply OK (" + std::to_string(chunks.size() - i - 1) + " left)";
                 if (suffix.size() < 24)
                     suffix.append(24 - suffix.size(), ' ');
@@ -447,9 +527,9 @@ inline bool sendChunkedFileToPort(RtMidiOut &midiOut,
             }
             else
             {
-                std::cout << "\n  NO REPLY within " << replyWaitMs << " ms\n";
                 errorMessage = "No identity reply after chunk " + std::to_string(i + 1) + "/"
-                              + std::to_string(chunks.size())
+                              + std::to_string(chunks.size()) + " (" + std::to_string(idReplyResendAttempts + 1)
+                              + " attempt(s), " + std::to_string(replyWaitMs) + " ms each)"
                               + (isLastChunk
                                      ? " (the final chunk) - the device may not have received it and could"
                                        " still be sitting in its bootloader; aborting transfer."
@@ -517,7 +597,9 @@ inline bool sendChunkedFileWithRetry(const std::string &portName,
                                      std::string &errorMessage,
                                      unsigned int firstGapDelayMs = 0,
                                      unsigned int firstChunkSize = 0,
-                                     bool finalChunkRebootsToApp = false)
+                                     bool finalChunkRebootsToApp = false,
+                                     unsigned int idReplyTimeoutMs = 300,
+                                     unsigned int idReplyResendAttempts = 2)
 {
     for (int attempt = 0; attempt < kChunkedSendRetryMaxAttempts; ++attempt)
     {
@@ -529,7 +611,8 @@ inline bool sendChunkedFileWithRetry(const std::string &portName,
 
         const bool sent = sendChunkedFileToPort(*midiOut, portName, bytes, chunks,
                                                 chunkSize, chunkDelayMs, postDelayMs, errorMessage,
-                                                firstGapDelayMs, firstChunkSize, finalChunkRebootsToApp);
+                                                firstGapDelayMs, firstChunkSize, finalChunkRebootsToApp,
+                                                idReplyTimeoutMs, idReplyResendAttempts);
         closePort();
 
         if (sent)
