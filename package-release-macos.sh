@@ -83,7 +83,18 @@ codesign --verify --strict "$FOLDER/SendSysEx"
 #    editor releases: folder at 160,220 -> Applications alias at 375,220).
 mkdir -p "$DIST_DIR"
 OUT="$DIST_DIR/$PKG.dmg"
-rm -f "$OUT"
+
+# Clean up anything a previous FAILED/interrupted run left behind. create-dmg
+# stages a read-write "rw.<name>.dmg" and mounts it at /Volumes/<volume>; a run
+# that dies mid-build leaves both, and the next run then loops on
+# "couldn't unmount ... Resource busy". Detach the stale volume and remove the
+# leftover intermediate + output first so a prior failure can't poison this run.
+while mount | grep -q " /Volumes/$VOLUME "; do
+    dev="$(mount | grep " /Volumes/$VOLUME " | awk '{print $1}' | head -1)"
+    echo "==> Detaching stale volume $dev (/Volumes/$VOLUME) ..."
+    hdiutil detach "$dev" -force >/dev/null 2>&1 || break
+done
+rm -f "$OUT" "$DIST_DIR/rw.$PKG.dmg"
 echo "==> Building DMG ..."
 create-dmg \
     --volname "$VOLUME" \
