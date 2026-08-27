@@ -86,42 +86,54 @@ Write release notes from the commits since the last tag
 
 ## macOS
 
-macOS ships a **universal** (arm64 + x86_64) `.dmg`, built/signed/notarized/
-stapled by `package-release-macos.sh` - the counterpart to `package-release.ps1`.
-It always builds universal, so a single download runs on both Apple Silicon and
-Intel Macs.
+macOS ships a **universal** (arm64 + x86_64) notarized **`.pkg` installer**,
+built/signed/notarized/stapled by `package-release-macos.sh` - the counterpart to
+`package-release.ps1`. It always builds universal, so a single download runs on
+both Apple Silicon and Intel Macs.
+
+A `.pkg` (not a `.dmg`) because it is the only clean path for a command-line tool:
+a loose CLI binary can't carry a stapled notarization ticket, so a drag-install
+from a `.dmg` leaves the copied binary quarantined and Gatekeeper blocks it. The
+`.pkg` installs to `/Applications/SendSysEx` (no quarantine flag), symlinks
+`SendSysEx` into `/usr/local/bin` (PATH), reveals the install folder in Finder,
+and is itself stapled - so it double-clicks and installs with no Gatekeeper
+prompt and no `xattr` step.
 
 ### Prerequisites
 
-- `brew install create-dmg`
-- Xcode command line tools (`codesign`, `xcrun notarytool`, `xcrun stapler`, `lipo`).
-- A **Developer ID Application** cert in the login keychain (signing).
+- Xcode command line tools (`codesign`, `pkgbuild`, `xcrun notarytool`, `xcrun stapler`, `lipo`).
+- A **Developer ID Application** cert in the login keychain (binary signing).
+- A **Developer ID Installer** cert in the login keychain (pkg signing).
 - A **notarytool keychain profile**, created once with
   `xcrun notarytool store-credentials <profile-name> --apple-id <id> --team-id <team> --password <app-specific-password>`.
   The Apple ID / app-specific password live in the keychain, never in this repo.
-  Pass the profile *name* to the script via `KMI_NOTARY_PROFILE`.
+
+The signing identities and notary profile can come from `~/Desktop/refresh_keys.sh`
+(`DEVELOPER_ID`, `DEVELOPER_ID_INSTALLER`, `APPLE_KEYCHAIN_PROFILE`), which the
+script reads automatically; or pass `KMI_SIGN_IDENTITY` / `KMI_INSTALLER_IDENTITY`
+/ `KMI_NOTARY_PROFILE` explicitly.
 
 ### Build + sign + notarize + package
 
 ```sh
-KMI_NOTARY_PROFILE="<your-notary-profile>" ./package-release-macos.sh
+source ~/Desktop/refresh_keys.sh        # loads the identities + notary profile
+./package-release-macos.sh
 ```
 
-This bumps nothing (edit `CMakeLists.txt` + `README.md` first, step 1 above),
-then: builds universal Release, signs the binary with the hardened runtime + a
-secure timestamp, stages a `SendSysEx/` folder (binary + `data/` + `syx/` +
-`README.md` + `LICENSE`), builds a drag-to-Applications `.dmg`
-(`packaging/macos/dmg-background.tiff`, folder icon at 160,220 → Applications
-alias at 375,220, 530×380 window - same layout as the KMI editors), then signs,
-notarizes, staples, and validates the `.dmg`. Output:
+Bump nothing here (edit `CMakeLists.txt` + `README.md` first, step 1 above), then
+the script: builds universal Release, signs the binary (hardened runtime + secure
+timestamp), stages the payload (binary + `data/` + `syx/` + `README.md` +
+`LICENSE`), `pkgbuild`s + signs the installer (install-location
+`/Applications/SendSysEx`, postinstall PATH symlink + Finder reveal), then
+notarizes, staples, and validates. Output:
 
 ```
-dist/SendSysEx-vX.Y.Z-macos-universal.dmg
-dist/SendSysEx-vX.Y.Z-macos-universal.dmg.sha256
+dist/SendSysEx-vX.Y.Z-macos-universal.pkg
+dist/SendSysEx-vX.Y.Z-macos-universal.pkg.sha256
 ```
 
-`KMI_SKIP_NOTARIZE=1` builds a signed-but-not-notarized dmg for local testing.
-Verify the finished artifact: `spctl -a -vvv -t open --context context:primary-signature dist/SendSysEx-vX.Y.Z-macos-universal.dmg`
+`KMI_SKIP_NOTARIZE=1` builds a signed-but-not-notarized pkg for local testing.
+Verify the finished artifact: `spctl -a -vvv -t install dist/SendSysEx-vX.Y.Z-macos-universal.pkg`
 should report `accepted / source=Notarized Developer ID`.
 
 ### Publish
@@ -130,6 +142,6 @@ Add the macOS assets to the same GitHub release as the Windows zip:
 
 ```sh
 gh release upload vX.Y.Z \
-    dist/SendSysEx-vX.Y.Z-macos-universal.dmg \
-    dist/SendSysEx-vX.Y.Z-macos-universal.dmg.sha256
+    dist/SendSysEx-vX.Y.Z-macos-universal.pkg \
+    dist/SendSysEx-vX.Y.Z-macos-universal.pkg.sha256
 ```

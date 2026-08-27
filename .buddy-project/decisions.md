@@ -16,25 +16,31 @@ All firmware update timing (inter-chunk delay, ACK timeout, etc.) and device ide
 
 `project(SendSysEx VERSION X.Y.Z)` flows into `version.h` via `configure_file`. README and release zips derive from this. Do not hardcode the version anywhere else.
 
-## macOS release: universal `.dmg`, drag-to-Applications (editor-shaped)
+## macOS release: universal notarized `.pkg` installer
 
-macOS releases ship a **universal** (arm64 + x86_64) `.dmg` built by
+macOS releases ship a **universal** (arm64 + x86_64) notarized **`.pkg`** built by
 `package-release-macos.sh` (the counterpart to `package-release.ps1`). Decisions:
 
 - **Always universal.** One download runs on both Apple Silicon and Intel. Built
   with `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`.
-- **`.dmg`, not a `.zip`.** A bare CLI binary in a zip can't be stapled; a `.dmg`
-  can, so Gatekeeper validates offline. The layout mirrors the KMI editors (see
-  00_Editors/QuNexus): a single **`SendSysEx` folder** (binary + `data/` + `syx/`
-  + README + LICENSE) that the user drags onto an Applications alias, over a
-  background with a drag arrow (`packaging/macos/dmg-background.tiff`, folder icon
-  at 160,220 → Applications alias at 375,220, 530×380 window). Built with
-  Homebrew `create-dmg`.
-- **Sign → notarize → staple.** Binary signed with the Kesumo Developer ID
-  (hardened runtime + secure timestamp); the `.dmg` is signed, notarized via a
-  **notarytool keychain profile** (its name passed through `KMI_NOTARY_PROFILE` -
-  never committed), stapled, and validated. No Apple ID, app-specific password,
-  or profile name is stored in the repo. Full steps in `RELEASING.md` → macOS.
+- **`.pkg`, not a `.dmg`.** This is the crux: a **loose CLI binary can't carry a
+  stapled notarization ticket** (only `.app`/`.pkg`/`.dmg` can). A drag-install
+  from a `.dmg` therefore hands the user a quarantined bare binary that Gatekeeper
+  blocks ("developer cannot be verified" - hit in the field on v0.15.0). A `.pkg`
+  installs to `/Applications/SendSysEx` **without** the quarantine flag, is itself
+  stapled, and its postinstall symlinks `SendSysEx` into `/usr/local/bin` (PATH)
+  and reveals the folder in Finder (via `launchctl asuser` so the window opens in
+  the user's session, not root's). Double-clicks and installs clean, no `xattr`.
+  (We briefly shipped a drag `.dmg` for v0.14.0/v0.15.0; replaced it with the
+  `.pkg` once the Gatekeeper block surfaced. The old `create-dmg` path and its
+  background asset were removed.)
+- **Sign → notarize → staple.** Binary signed with the Kesumo **Developer ID
+  Application** cert (hardened runtime + secure timestamp); the `.pkg` signed with
+  the **Developer ID Installer** cert; notarized via a **notarytool keychain
+  profile**, stapled, and validated. Identities + profile come from
+  `~/Desktop/refresh_keys.sh` (`DEVELOPER_ID` / `DEVELOPER_ID_INSTALLER` /
+  `APPLE_KEYCHAIN_PROFILE`) or `KMI_*` overrides - no Apple ID, password, or
+  profile secret is stored in the repo. Full steps in `RELEASING.md` → macOS.
 
 ## Windows-only release packaging script
 

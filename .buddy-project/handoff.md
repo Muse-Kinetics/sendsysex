@@ -86,7 +86,7 @@ roughly in order, before tagging:
 
 ### Standing items (not release-blocking)
 - macOS release packaging is now scripted: `package-release-macos.sh` builds a universal, signed,
-  notarized, stapled `.dmg` (see `RELEASING.md` → macOS). First used for v0.14.0.
+  notarized, stapled universal `.pkg` installer (see `RELEASING.md` → macOS).
 - No automated tests — all validation is manual smoke-test on hardware.
 - EM Pro Riser shares MalletStation's EM1 firmware → will need `confirmByAppReconnectOnly` when it
   gets a `--fw-update` family entry.

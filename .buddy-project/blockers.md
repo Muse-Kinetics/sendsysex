@@ -14,11 +14,12 @@ Windows releases must be signed with the KMI SafeNet token, which is physically 
 
 ## macOS release packaging - RESOLVED (2026-08-27)
 
-macOS now has `package-release-macos.sh` (universal `.dmg`, sign → notarize →
-staple; the counterpart to `package-release.ps1`), documented in `RELEASING.md`
-→ macOS. Notarization uses a notarytool keychain profile whose name is passed via
-`KMI_NOTARY_PROFILE` (credential lives in the keychain, not the repo). First
-universal `.dmg` built for v0.14.0.
+macOS now has `package-release-macos.sh` (universal notarized `.pkg` installer,
+sign → notarize → staple; the counterpart to `package-release.ps1`), documented in
+`RELEASING.md` → macOS. Signing/notary creds come from `~/Desktop/refresh_keys.sh`
+(or `KMI_*` overrides); nothing sensitive is in the repo. (Shipped a drag `.dmg`
+for v0.14.0/v0.15.0, then switched to `.pkg` when the loose-CLI Gatekeeper block
+surfaced - see decisions.md.)
 
 ## README version header is stale
 
