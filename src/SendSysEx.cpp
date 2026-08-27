@@ -20,6 +20,9 @@
 
 #if defined(_WIN32)
 #include <direct.h> // _mkdir
+#include <io.h>     // _isatty / _fileno (interactive-mode color detection)
+#else
+#include <unistd.h> // isatty / fileno
 #endif
 
 #include "RtMidi.h"
@@ -67,6 +70,7 @@ struct CliOptions
     bool idRequestOnly = false;
     bool showHelp = false;
     bool showBootloaderHelp = false;
+    bool interactive = false;
     int portNumber = -1;
     std::string portName;
     std::string filePath;
@@ -458,7 +462,8 @@ CliOptions parseArguments(int argc, const char *argv[])
 
     if (argc < 2)
     {
-        options.showHelp = true;
+        // Bare invocation -> interactive mode (not help).
+        options.interactive = true;
         return options;
     }
 
@@ -2017,6 +2022,306 @@ int runManualProcess(const CliOptions &options)
 }
 }
 
+// ============================================================================
+// Interactive mode (bare `SendSysEx` with no arguments). A simple numbered-menu
+// TUI: scan connected KMI devices -> pick one -> Update firmware / Install
+// Bootloader / Back. Line-based (std::getline), so it works in any terminal and
+// degrades gracefully when stdin is piped.
+// ============================================================================
+namespace
+{
+// ANSI red for a non-responding device row. Enabled only when stdout is a real
+// terminal (and, on Windows, VT processing can be turned on) - otherwise the
+// escape codes would be literal garbage in a pipe/redirect.
+bool gInteractiveColor = false;
+
+void initInteractiveColor()
+{
+#if defined(_WIN32)
+    if (_isatty(_fileno(stdout)))
+    {
+        HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode = 0;
+        const DWORD ENABLE_VT = 0x0004; // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode))
+            gInteractiveColor = (SetConsoleMode(h, mode | ENABLE_VT) != 0);
+    }
+#else
+    gInteractiveColor = (isatty(fileno(stdout)) != 0);
+#endif
+}
+
+std::string red(const std::string &s) { return gInteractiveColor ? ("\033[31m" + s + "\033[0m") : s; }
+std::string dim(const std::string &s) { return gInteractiveColor ? ("\033[2m" + s + "\033[0m") : s; }
+
+struct DeviceEntry
+{
+    std::string familyId;      // normalized (e.g. "softstep")
+    std::string familyDisplay; // e.g. "SoftStep"
+    std::string portName;
+    std::string modeLabel;     // "application" / "bootloader" / "legacy (pre-bootloader)" / "not responding"
+    std::string versionStr;    // "2.0.7" / "28" / "" (unknown)
+    bool responding = false;   // false -> render RED + show the support message
+    bool canFwUpdate = false;
+    bool canInstallBootloader = false;
+};
+
+// Query one family that is known to have visible ports. Determines whether it
+// answers a standard identity request (and in which state/version), whether
+// it's a legacy pre-bootloader unit (answers only the KMI REQUEST_FW_VERSION -
+// SoftStep/12 Step), or whether it's a known OSC-only device that legitimately
+// doesn't answer id requests (confirmByAppReconnectOnly, e.g. MalletStation).
+// Only a genuine no-response is flagged not-responding (red).
+void queryDeviceIdentity(const std::string &familyId, DeviceEntry &e, bool &present)
+{
+    present = false;
+
+    deviceDatabase db;
+    db.loadFamily(familyId);
+    std::string defFw;
+    const bool hasFirmware = db.getDefaultFirmwareVersion(defFw) && !defFw.empty();
+    const bool oscOnly = db.getFirmwareUpdateDefaults().confirmByAppReconnectOnly;
+
+    kmiDevice device(familyId);
+    if (!device.refreshPorts() || device.getState() == kmiDevice::State::disconnected)
+        return; // this family's device is not connected
+    present = true;
+
+    e.familyId = familyId;
+    e.familyDisplay = db.getDisplayName().empty() ? familyId : db.getDisplayName();
+    e.portName = device.getActiveOutputPortName();
+
+    // refreshPorts() already sent the identity request and waited ~500 ms; give
+    // a slow board a little longer (the reply lands on the async input callback).
+    // Modern devices reply well within this; a legacy unit that won't answer the
+    // standard request at all falls through to the REQUEST_FW_VERSION probe below.
+    for (int i = 0; i < 8 && !device.hasReceivedIdentity(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    if (device.hasReceivedIdentity())
+    {
+        const kmiDevice::IdentityMetadata &id = device.getIdentityMetadata();
+        e.responding = true;
+        if (device.getState() == kmiDevice::State::bootloader)
+        {
+            e.modeLabel = "bootloader";
+            e.versionStr = versionToString(id.bootloaderVersion);
+        }
+        else
+        {
+            e.modeLabel = "application";
+            e.versionStr = versionToString(id.applicationVersion);
+        }
+        e.canFwUpdate = hasFirmware;
+        e.canInstallBootloader = false; // already has a bootloader
+        return;
+    }
+
+    // No standard identity reply. Free the ports before the legacy probe reopens them.
+    device.disconnect();
+
+    // Legacy pre-bootloader SoftStep (SSCOM v93) / 12 Step (v28/v30): these
+    // answer only the device-specific REQUEST_FW_VERSION. A reply here means the
+    // unit has NO bootloader yet -> offer Install Bootloader (this is the gate).
+    if (familyId == "softstep" || familyId == "12step")
+    {
+        std::string legacyVer;
+        if (runLegacyVersionQuery(familyId, legacyVer))
+        {
+            e.responding = true;
+            e.modeLabel = "legacy (pre-bootloader)";
+            e.versionStr = legacyVer.empty() ? std::string() : legacyVer;
+            e.canInstallBootloader = true;
+            e.canFwUpdate = false; // needs a bootloader installed first
+            return;
+        }
+    }
+
+    if (oscOnly)
+    {
+        // e.g. MalletStation / EM Pro Riser: the application firmware reports its
+        // version over OSC-over-SysEx, not a standard identity reply, so silence
+        // here is expected - the device is fine. Present + updatable, NOT red.
+        e.responding = true;
+        e.modeLabel = "application (reports version via OSC)";
+        e.versionStr.clear();
+        e.canFwUpdate = hasFirmware;
+        e.canInstallBootloader = false;
+        return;
+    }
+
+    // Genuinely silent.
+    e.responding = false;
+    e.modeLabel = "not responding";
+}
+
+// Swallows output while alive - the per-family probe (refreshPorts, identity
+// requests, port-translation dumps) is CLI-useful noise but clutters the
+// interactive menu, so the scan runs silently.
+struct ScopedCoutMute
+{
+    struct NullBuf : std::streambuf { int overflow(int c) override { return c; } };
+    NullBuf nb;
+    std::streambuf *old;
+    ScopedCoutMute() : old(std::cout.rdbuf(&nb)) {}
+    ~ScopedCoutMute() { std::cout.rdbuf(old); }
+};
+
+std::vector<DeviceEntry> scanConnectedDevices()
+{
+    std::vector<DeviceEntry> devices;
+    const std::vector<std::string> families = listFamilyIds();
+    ScopedCoutMute mute; // keep the probe internals out of the menu
+    for (std::size_t i = 0; i < families.size(); ++i)
+    {
+        DeviceEntry e;
+        bool present = false;
+        queryDeviceIdentity(families[i], e, present);
+        if (present)
+            devices.push_back(e);
+    }
+    return devices;
+}
+
+// One line summarizing a device for the main list (already indexed by caller).
+std::string deviceListLabel(const DeviceEntry &d)
+{
+    std::string info = d.responding ? d.modeLabel : "NOT RESPONDING";
+    if (d.responding && !d.versionStr.empty())
+        info += "  v" + d.versionStr;
+    return d.familyDisplay + "  -  " + info;
+}
+
+// Detail + action screen for one device. Returns true if a firmware action ran
+// (so the caller re-scans, since device state changed); false on Back/invalid
+// (caller keeps its cached list - re-probing fragile legacy units on every Back
+// can transiently wedge them).
+bool deviceDetailScreen(const DeviceEntry &d)
+{
+    std::cout << "\n--- " << d.familyDisplay << " ---\n";
+    std::cout << "Port:    " << d.portName << "\n";
+
+    if (!d.responding)
+    {
+        std::cout << red("Status:  NOT RESPONDING") << "\n\n";
+        std::cout << "Device is not responding to id-request. If power cycling does not fix\n"
+                     "this, you may need to have the device re-flashed. Submit a support\n"
+                     "ticket at https://support.musekinetics.com for more information.\n";
+    }
+    else
+    {
+        std::cout << "Status:  " << d.modeLabel << "\n";
+        if (!d.versionStr.empty())
+            std::cout << "Version: " << d.versionStr << "\n";
+    }
+
+    // Build the numbered action list (context-sensitive), Back always last.
+    std::vector<char> actionKinds; // 'u' update firmware, 'b' install bootloader
+    std::cout << "\n";
+    if (d.responding && d.canFwUpdate)
+    {
+        std::cout << "  " << (actionKinds.size() + 1) << ". Update firmware\n";
+        actionKinds.push_back('u');
+    }
+    if (d.responding && d.canInstallBootloader)
+    {
+        std::cout << "  " << (actionKinds.size() + 1) << ". Install Bootloader\n";
+        actionKinds.push_back('b');
+    }
+    const int backNum = static_cast<int>(actionKinds.size()) + 1;
+    std::cout << "  " << backNum << ". Back\n";
+    std::cout << "\nSelect: " << std::flush;
+
+    std::string line;
+    if (!std::getline(std::cin, line))
+        return false;
+    const std::string c = trimCopy(line);
+    const int sel = std::atoi(c.c_str());
+    if (sel == backNum || c.empty())
+        return false;
+    if (sel < 1 || sel > static_cast<int>(actionKinds.size()))
+    {
+        std::cout << "Invalid selection.\n";
+        return false;
+    }
+
+    CliOptions opt;                    // fresh defaults, same as a bare CLI invocation
+    opt.familyName = d.familyDisplay;  // normalizeFamilyId resolves this
+    if (actionKinds[sel - 1] == 'u')
+    {
+        opt.automaticMode = true;
+        runAutomaticProcess(opt);
+    }
+    else
+    {
+        opt.bootloaderInstall = true;
+        runBootloaderInstall(opt);
+    }
+
+    std::cout << "\nPress Enter to return to the device list ..." << std::flush;
+    std::string dummy;
+    std::getline(std::cin, dummy);
+    return true;
+}
+
+int runInteractiveMode()
+{
+    initInteractiveColor();
+    std::cout << "\n=== SendSysEx interactive mode ===\n";
+    std::cout << dim("Run with --help for non-interactive command-line arguments.") << "\n";
+
+    std::cout << "\nScanning connected MIDI devices ...\n";
+    std::vector<DeviceEntry> devices = scanConnectedDevices();
+
+    for (;;)
+    {
+        std::cout << "\nConnected KMI devices:\n";
+        if (devices.empty())
+            std::cout << "  (none detected - connect a device and it will appear here)\n";
+        for (std::size_t i = 0; i < devices.size(); ++i)
+        {
+            const std::string row = "  " + std::to_string(i + 1) + ". " + deviceListLabel(devices[i]);
+            std::cout << (devices[i].responding ? row : red(row)) << "\n";
+        }
+        std::cout << "  r. Rescan\n";
+        std::cout << "  x. Exit\n";
+        std::cout << "\nSelect a device (number, r to rescan, x to exit): " << std::flush;
+
+        std::string line;
+        if (!std::getline(std::cin, line))
+        {
+            std::cout << "\n";
+            return 0; // EOF (piped/closed stdin)
+        }
+        const std::string c = trimCopy(line);
+        if (c == "x" || c == "X")
+        {
+            std::cout << "Goodbye.\n";
+            return 0;
+        }
+        if (c == "r" || c == "R")
+        {
+            std::cout << "\nScanning connected MIDI devices ...\n";
+            devices = scanConnectedDevices();
+            continue;
+        }
+        const int idx = std::atoi(c.c_str());
+        if (idx < 1 || idx > static_cast<int>(devices.size()))
+        {
+            std::cout << "Invalid selection.\n";
+            continue;
+        }
+        // Only re-probe after an actual action (which changed device state) -
+        // not after a plain Back, to avoid needlessly re-probing fragile units.
+        if (deviceDetailScreen(devices[idx - 1]))
+        {
+            std::cout << "\nRe-scanning connected MIDI devices ...\n";
+            devices = scanConnectedDevices();
+        }
+    }
+}
+}
+
 int main(int argc, const char *argv[])
 {
     // stdout is fully buffered (not line-buffered) whenever it's not a live
@@ -2073,6 +2378,10 @@ int main(int argc, const char *argv[])
 
     std::cout << "OS: " << midiBackend::describeOs() << "\n";
     std::cout << "MIDI backend: " << midiBackend::describeSelectedApi() << "\n";
+
+    // Bare invocation (no arguments) launches interactive mode.
+    if (options.interactive)
+        return runInteractiveMode();
 
     std::cout << "Chunk size: " << options.chunkSize << " bytes, delay: " << options.chunkDelayMs
               << " ms, post-delay: " << options.postDelayMs << " ms\n";

@@ -534,6 +534,11 @@ bool kmiDevice::hasReceivedIdentity() const
     return identityMetadata_.received;
 }
 
+const kmiDevice::IdentityMetadata &kmiDevice::getIdentityMetadata() const
+{
+    return identityMetadata_;
+}
+
 const std::string &kmiDevice::getActiveOutputPortName() const
 {
     return activeOutputPortName_;

@@ -22,10 +22,12 @@
 #include <windows.h>
 #elif defined(__APPLE__)
 #include <climits>
+#include <dirent.h>
 #include <mach-o/dyld.h>
 #include <stdlib.h>
 #elif defined(__linux__)
 #include <climits>
+#include <dirent.h>
 #include <unistd.h>
 #endif
 
@@ -320,6 +322,53 @@ inline std::string resolveDataPath(const std::string &relativePath)
             return candidates[i];
     }
     return std::string();
+}
+
+// List every family id that has a data/families/<id>.json definition on disk,
+// by directory-listing that folder. Used by interactive mode to discover all
+// scannable families without a hardcoded list (kmi_device_database.json's
+// families[] is a curated subset and drifts out of sync). Returns normalized
+// ids (the file basenames, minus ".json"), sorted. Empty on any failure.
+inline std::vector<std::string> listFamilyIds()
+{
+    std::vector<std::string> ids;
+    // Anchor off a file we know exists to locate the families directory, then
+    // take its parent path (works with either '/' or '\\').
+    const std::string anchor = resolveDataPath("data/families/softstep.json");
+    if (anchor.empty())
+        return ids;
+    const std::size_t slash = anchor.find_last_of("/\\");
+    if (slash == std::string::npos)
+        return ids;
+    const std::string dir = anchor.substr(0, slash);
+
+#if defined(_WIN32)
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*.json").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        do {
+            std::string name = fd.cFileName;
+            if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)
+                ids.push_back(name.substr(0, name.size() - 5));
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR *d = opendir(dir.c_str());
+    if (d)
+    {
+        for (struct dirent *e = readdir(d); e != 0; e = readdir(d))
+        {
+            std::string name = e->d_name;
+            if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)
+                ids.push_back(name.substr(0, name.size() - 5));
+        }
+        closedir(d);
+    }
+#endif
+    std::sort(ids.begin(), ids.end());
+    return ids;
 }
 
 #endif

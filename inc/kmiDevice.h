@@ -69,6 +69,7 @@ public:
     State getState() const;
     bool isFirmwareUpdatePending() const;
     bool hasReceivedIdentity() const;
+    const IdentityMetadata &getIdentityMetadata() const;
     const std::string &getActiveOutputPortName() const;
     bool getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path) const;
     const deviceDatabase::FirmwareUpdateDefaults &getFirmwareUpdateDefaults() const;
