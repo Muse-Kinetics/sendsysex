@@ -986,10 +986,52 @@ CliOptions parseArguments(int argc, const char *argv[])
 // Request bytes are verbatim: F0 + KMI header + 50 zero pad + REQUEST_FW_VERSION
 // packet + F7. The reply is a FW_HEADER; its ASCII version digits are < 0x80 so
 // they survive 7-bit encoding and can be read straight from the raw reply.
+// Open the input ports belonging to the device itself, identified by the family
+// port marker ("SSCOM", "12"). Listening on *every* input port instead is unsafe:
+// any loopback in the system - ALSA's "Midi Through" port on Linux, a virtual
+// port, or a physical DIN out-to-in cable on any OS - echoes our own outgoing
+// request straight back, and a request built from the same KMI header looks
+// exactly like a device reply to the matchers below. Returns the opened ports;
+// the caller owns them.
+static std::vector<RtMidiIn *> openDeviceInputPorts(const std::string &marker,
+                                                    RtMidiIn::RtMidiCallback callback,
+                                                    void *userData)
+{
+    std::vector<RtMidiIn *> ins;
+    RtMidiIn probe(midiBackend::selectedApi());
+    for (unsigned int i = 0; i < probe.getPortCount(); ++i)
+    {
+        if (probe.getPortName(i).find(marker) == std::string::npos)
+            continue;
+        RtMidiIn *in = 0;
+        try
+        {
+            in = new RtMidiIn(midiBackend::selectedApi());
+            in->ignoreTypes(false, false, false);
+            in->openPort(i);
+            in->setCallback(callback, userData);
+            ins.push_back(in);
+        }
+        catch (...) { delete in; }
+    }
+    return ins;
+}
+
+static void closeDeviceInputPorts(std::vector<RtMidiIn *> &ins)
+{
+    for (std::size_t i = 0; i < ins.size(); ++i)
+    {
+        try { ins[i]->closePort(); } catch (...) {}
+        delete ins[i];
+    }
+    ins.clear();
+}
+
 struct LegacyReplyState
 {
     volatile bool matched;
     std::vector<unsigned char> sig;   // manufacturer signature to match (e.g. 1B 48 7A 01)
+    std::vector<unsigned char> request; // what we sent, so an echo of it can be rejected
     std::vector<unsigned char> reply; // captured bytes of the matching message
     LegacyReplyState() : matched(false) {}
 };
@@ -998,6 +1040,10 @@ static void legacyReplyCallback(double, std::vector<unsigned char> *msg, void *u
 {
     LegacyReplyState *s = static_cast<LegacyReplyState *>(user);
     if (s->matched || msg == 0 || msg->size() < s->sig.size())
+        return;
+    // Our own request carries the same manufacturer signature we are matching on,
+    // so an echo would otherwise "match". Ignore it.
+    if (*msg == s->request)
         return;
     for (std::size_t i = 0; i + s->sig.size() <= msg->size(); ++i)
     {
@@ -1030,7 +1076,7 @@ static bool runLegacyVersionQuery(const std::string &familyId, std::string &vers
     req.push_back(0xF7);
 
     // Find an output port to send to (any port carrying the family marker) and
-    // open every input to catch the reply wherever it lands.
+    // listen on that same device's input ports for the reply.
     RtMidiOut out(midiBackend::selectedApi());
     int outIdx = -1;
     const std::string marker = (familyId == "softstep") ? "SSCOM" : "12";
@@ -1042,22 +1088,17 @@ static bool runLegacyVersionQuery(const std::string &familyId, std::string &vers
 
     LegacyReplyState state;
     state.sig = sig;
-    std::vector<RtMidiIn *> ins;
-    RtMidiIn probe(midiBackend::selectedApi());
-    for (unsigned int i = 0; i < probe.getPortCount(); ++i)
-    {
-        RtMidiIn *in = 0;
-        try { in = new RtMidiIn(midiBackend::selectedApi()); in->ignoreTypes(false,false,false);
-              in->openPort(i); in->setCallback(legacyReplyCallback, &state); ins.push_back(in); }
-        catch (...) { delete in; }
-    }
+    state.request = req;
+    std::vector<RtMidiIn *> ins = openDeviceInputPorts(marker, legacyReplyCallback, &state);
+    if (ins.empty())
+        return false;
 
     std::vector<unsigned char> msg(req.begin(), req.end());
     out.sendMessage(&msg);
     for (int waited = 0; waited < 3000 && !state.matched; waited += 5)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-    for (std::size_t i = 0; i < ins.size(); ++i) { try { ins[i]->closePort(); } catch (...) {} delete ins[i]; }
+    closeDeviceInputPorts(ins);
 
     if (!state.matched)
         return false;
@@ -1673,12 +1714,16 @@ static bool captureFirmwareDump(const std::string &familyId, std::vector<unsigne
     else
         return false;
 
+    const std::vector<unsigned char> request(reqBytes, reqBytes + reqLen);
+
     struct DumpState
     {
         volatile bool done;
+        const std::vector<unsigned char> *request;
         std::vector<unsigned char> buf;
-        DumpState() : done(false) {}
+        DumpState() : done(false), request(0) {}
     } state;
+    state.request = &request;
 
     struct CB
     {
@@ -1686,6 +1731,10 @@ static bool captureFirmwareDump(const std::string &familyId, std::vector<unsigne
         {
             DumpState *s = static_cast<DumpState *>(u);
             if (s->done || m == 0 || m->size() < 4 || m->front() != 0xF0)
+                return;
+            // Reject an echo of the request we just sent. It shares the family's
+            // KMI header, so it would otherwise pass for a firmware image.
+            if (s->request && *m == *s->request)
                 return;
             s->buf = *m;
             s->done = true;
@@ -1700,28 +1749,16 @@ static bool captureFirmwareDump(const std::string &familyId, std::vector<unsigne
         return false;
     out_port.openPort(static_cast<unsigned int>(outIdx));
 
-    std::vector<RtMidiIn *> ins;
-    RtMidiIn probe(midiBackend::selectedApi());
-    for (unsigned int i = 0; i < probe.getPortCount(); ++i)
-    {
-        RtMidiIn *in = 0;
-        try
-        {
-            in = new RtMidiIn(midiBackend::selectedApi());
-            in->ignoreTypes(false, false, false);
-            in->openPort(i);
-            in->setCallback(CB::proc, &state);
-            ins.push_back(in);
-        }
-        catch (...) { delete in; }
-    }
+    std::vector<RtMidiIn *> ins = openDeviceInputPorts(marker, CB::proc, &state);
+    if (ins.empty())
+        return false;
 
-    std::vector<unsigned char> req(reqBytes, reqBytes + reqLen);
+    std::vector<unsigned char> req(request);
     out_port.sendMessage(&req);
     for (int waited = 0; waited < 15000 && !state.done; waited += 20)
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    for (std::size_t i = 0; i < ins.size(); ++i) { try { ins[i]->closePort(); } catch (...) {} delete ins[i]; }
+    closeDeviceInputPorts(ins);
 
     if (!state.done)
         return false;
@@ -1869,14 +1906,32 @@ int runBootloaderInstall(const CliOptions &options)
         std::ofstream df(dumpPath.c_str(), std::ios::binary);
         df.write(reinterpret_cast<const char *>(dump.data()), static_cast<std::streamsize>(dump.size()));
     }
-    const bool dumpValid = dump.size() > 10 && dump.front() == 0xF0 && dump.back() == 0xF7 &&
-                           dump[1] == 0x00 && dump[2] == hdrMfg0 && dump[3] == hdrMfg1 && dump[4] == hdrMfg2;
+    // A real image is 76-110 KB across every shipped SoftStep/12 Step payload, so
+    // anything under 4 KB is not a firmware dump. The header check alone is not
+    // enough: our own dump request carries the same KMI header, so a short echo
+    // or a truncated reply would otherwise pass and let the trojan install
+    // proceed against a device whose image was never actually read.
+    const std::size_t kMinPlausibleImageBytes = 4096;
+    const bool headerValid = dump.size() > 10 && dump.front() == 0xF0 && dump.back() == 0xF7 &&
+                             dump[1] == 0x00 && dump[2] == hdrMfg0 && dump[3] == hdrMfg1 && dump[4] == hdrMfg2;
     std::cout << "Captured " << dump.size() << " bytes -> " << dumpPath << "\n";
-    if (!dumpValid)
+    if (!headerValid)
     {
         char expected[48];
         std::snprintf(expected, sizeof(expected), "F0 00 %02X %02X %02X ... F7", hdrMfg0, hdrMfg1, hdrMfg2);
         std::cout << "ERROR: captured image failed validation (expected " << expected << "). Aborting.\n";
+        return 1;
+    }
+    if (dump.size() < kMinPlausibleImageBytes)
+    {
+        std::cout << "ERROR: captured image is only " << dump.size() << " bytes - far too small to be a "
+                  << famDisplay << " firmware image (expected at least " << kMinPlausibleImageBytes
+                  << " bytes).\n"
+                     "       This usually means no real reply arrived and something echoed the request back "
+                     "(a MIDI loopback\n"
+                     "       such as ALSA's \"Midi Through\" port, a virtual port, or a DIN out-to-in cable). "
+                     "Disconnect any\n"
+                     "       loopback and retry. Aborting before flashing.\n";
         return 1;
     }
     std::cout << "Image validated (F0 ... F7, KMI " << famDisplay << " header present).\n";

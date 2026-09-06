@@ -16,6 +16,33 @@ cmake --build build
 # Binary: build/SendSysEx
 ```
 
+## Build (Linux)
+
+```sh
+cmake -B build && cmake --build build
+./build/SendSysEx -l          # ALSA sequencer ports, e.g. "SSCOM:SSCOM MIDI 1 32:0"
+```
+
+The full firmware-update and bootloader-install path is hardware-validated on Linux as of 2026-09-06.
+
+If every ALSA client fails with `Unknown SEQ default` / `Cannot open shared library
+libasound_module_conf_pulse.so`, a source-built alsa-lib is pointing at a plugin dir that was never
+populated — run:
+
+```sh
+./scripts/fix-alsa-plugin-dir.sh            # apply (prompts for sudo)
+./scripts/fix-alsa-plugin-dir.sh --check    # report status only
+./scripts/fix-alsa-plugin-dir.sh --undo     # revert
+```
+
+Useful when inspecting the ALSA MIDI path:
+
+```sh
+aconnect -l                   # list ALSA sequencer clients/ports
+amidi -l                      # list raw ALSA MIDI devices
+cat /proc/asound/seq/clients  # per-client input pool sizes (SysEx buffering)
+```
+
 ## Build (Windows — preset)
 
 ```powershell

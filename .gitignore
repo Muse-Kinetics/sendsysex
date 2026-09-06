@@ -48,3 +48,6 @@ cmake-build-release/
 
 ### Release packaging (package-release.ps1 output) ###
 dist/
+
+### Bootloader-install session artifacts (session.log + captured device dump) ###
+bootloader-install-*/

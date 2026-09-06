@@ -113,6 +113,10 @@ inline void sendBytes(RtMidiOut &out, const std::vector<uint8_t> &bytes, bool dr
         return;
     // RtMidi wants a non-const vector<unsigned char>.
     std::vector<unsigned char> msg(bytes.begin(), bytes.end());
+    // Each span here is a slice of ONE very large SysEx message - a single F0
+    // opens the first span, a single F7 closes the last, and everything between
+    // is bare payload - so that the gaps below land as real wire gaps on the
+    // wire rather than being absorbed by a send queue.
     out.sendMessage(&msg);
     // Block until this chunk is actually delivered, so the timing gaps that
     // follow (block-data / sector / bank) become REAL inter-message wire gaps
@@ -344,6 +348,8 @@ inline bool probeBankTransition(RtMidiOut &out, ChunkReplyState &replyState,
     {
         if (sinceSend >= opt.bankProbeResendMs)
         {
+            // Sent inside the still-open update message (no new F0), so it is a
+            // continuation span, not a self-contained message - see sendBytes().
             out.sendMessage(&pkt);
             out.drain(); // ensure the request is actually on the wire before waiting for the reply
             sinceSend = 0;

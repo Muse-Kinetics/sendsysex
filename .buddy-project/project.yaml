@@ -6,11 +6,11 @@ description: >-
   repo. Uses the KMI WMS fork of RtMidi (inc/rtmidi submodule).
 repository: git@github.com:Muse-Kinetics/sendsysex.git
 status: active
-phase: firmware-update reliability hardening (pre-release)
+phase: post-v0.15.0 — Linux/ALSA bootloader-install investigation
 owner: Eric Bateman <eric@musekinetics.com>
 responsible_buddy: SiliconDreams
 created: "2026-08-25"
-last_updated: "2026-08-25T18:05:00-07:00"
+last_updated: "2026-09-06"
 peer_buddies: []
 tags:
   - midi

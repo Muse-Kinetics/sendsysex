@@ -110,3 +110,54 @@ version request, the firmware-dump request, and the dumped-image validation. Bot
 validated end-to-end (SoftStep on v93, 12 Step on v28). Adding another same-era family is mostly:
 register the trojan payload + a `legacy_application` port profile, add the family's header bytes to
 `runLegacyVersionQuery`/`captureFirmwareDump`, and un-gate `runBootloaderInstall`.
+
+## ALSA needs a fragment-aware send for the legacy sector-wise transfer (2026-09-06)
+
+The legacy trojan install streams **one single SysEx message** — the 80,580-byte SoftStep image has
+exactly one `F0` and one `F7` — deliberately split into ~100 separately-timed spans so the
+block-to-data / sector / bank-transition gaps land as **real wire gaps** rather than being absorbed
+by a send queue. Every span except the first is therefore *not* a self-contained MIDI message.
+
+`MidiOutAlsa::sendMessage()` re-encodes bytes through `snd_midi_event_encode()`, which returns
+`SND_SEQ_EVENT_NONE` for any span that is not a complete message — RtMidi then reports
+`incomplete message!` and drops it (`inc/rtmidi/RtMidi.cpp:2806`). Confirmed directly against
+alsa-lib: an opening `F0…` with no `F7`, a bare middle span, and a trailing `…F7` all encode to
+`EVENT_NONE`; only a whole `F0…F7` produces an event. (The encoder does accumulate across calls and
+emits at the closing `F7`, but that collapses the whole image into one event and destroys exactly the
+inter-span timing the send exists to control.) CoreMIDI and WinMM pass raw bytes through verbatim,
+which is why this never surfaced on macOS/Windows.
+
+**Decision: fix it inside `MidiOutAlsa::sendMessage()` — NO public API change.** `AlsaMidiData` gains
+a `sysexInProgress` flag (mirroring the `sysexInProgress` the fork's `MidiOutCore` already carries).
+When a call starts with `F0` or the port is mid-SysEx, the bytes are emitted directly with
+`snd_seq_ev_set_sysex()`, bypassing the encoder; everything else takes the original encoder path
+unchanged. `RtMidi.h` is **untouched**.
+
+**Rationale — and why this framing matters for upstreaming.** An earlier draft added a public
+`sendMessageFragment()` virtual on `MidiOutApi`. That was rejected on review as the wrong shape for
+an upstream PR: it is a new vtable entry (ABI break for `MidiOutApi` subclasses), it creates two ways
+to do one thing whose difference is invisible on 8 of 9 backends (so a user testing on macOS cannot
+tell them apart, then ships something broken on Linux), and it leaks an ALSA implementation detail
+into the cross-platform surface.
+
+Framed as an internal fix it is instead a plain **cross-platform consistency bug**: `sendMessage()`
+has no documented framing contract — the header says only "a pointer to the MIDI message as raw
+bytes" — and CoreMIDI, WinMM, JACK and Web all accept a partial SysEx byte run, while ALSA silently
+drops it (a WARNING the caller can easily miss). ALSA is the outlier imposing an undocumented
+constraint. This is also invisible to every existing caller and fixes anyone who has ever tried to
+stream a large SysEx in pieces on Linux.
+
+The caller side needs no change at all: `sendBytes()` and the bank-transition probe call plain
+`sendMessage()` as they always did. The timing/chunking model is untouched — sector spans, gaps,
+padding modes and bank-probe logic all unchanged.
+
+**Tradeoff**: one more local change to the KMI RtMidi fork to carry forward (as `drain()` already
+is) — but this one is a self-contained backend bug fix with no API surface, so it is a plausible
+standalone upstream PR. Open caveat: interleaved real-time bytes mid-SysEx are handled by the state
+machine but have not been exercised on hardware.
+
+**Hardware-validated on Linux/ALSA (2026-09-06)** — the first successful bootloader install on Linux:
+SoftStep legacy v93 → 100/100 sectors with **zero** `incomplete message!` errors → `VERIFY OK`,
+bootloader v1.0.0 → `--fw-update softstep` 290/290 chunks all ACKed → **application v2.0.7 confirmed**.
+Re-verified after the rework to the no-API-change form: two further full `--fw-update` round trips
+(2.0.7 → 2.0.6 → 2.0.7, 289/289 chunks each) plus `--id-request`, all clean.
