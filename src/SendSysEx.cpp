@@ -195,7 +195,7 @@ void printHelp()
         << "  SendSysEx -l\n"
         << "  SendSysEx --list-normalized [family]\n"
         << "  SendSysEx -p <num>|-n <name> -f <file.syx> [-cs <bytes>] [-cd <ms>] [-pd <ms>]\n"
-        << "  SendSysEx --fw-update <family> [--fw-version <ver>] [-t <sec>]\n"
+        << "  SendSysEx --fw-update <family> [-f <file.syx>] [--fw-version <ver>] [-t <sec>]\n"
         << "  SendSysEx --id-request <family> [-t <sec>]\n"
         << "  SendSysEx --bootloader-install <family>\n"
         << "  On Windows, any command also accepts --midi-backend <winmm|wms>.\n"
@@ -219,6 +219,14 @@ void printHelp()
         << "                              12Step, BopPad, K-Board, KBP4, MalletStation, QuNeo,\n"
         << "                              QuNexus, SoftStep (case-insensitive).\n"
         << "  --fw-version <version>      Firmware version to send (default: family's latest).\n"
+        << "                              With -f, also asserts which version that file holds,\n"
+        << "                              re-enabling the post-update version match.\n"
+        << "  -f <file.syx>               With --fw-update: send this file instead of the family\n"
+        << "                              database payload. Bootloader entry, chunking and\n"
+        << "                              reconnect handling are unchanged - only the firmware\n"
+        << "                              bytes differ. For flashing a freshly built image that\n"
+        << "                              is not registered in the database yet. Without\n"
+        << "                              --fw-version the post-update version match is skipped.\n"
         << "  --id-request <family>       Send an identity request, print the reply, and exit.\n"
         << "  --bootloader-install <family>  Guided legacy-bootloader (trojan) install: risk\n"
         << "                              prompt, connection + dump validation, install, verify,\n"
@@ -1199,6 +1207,12 @@ int runAutomaticProcess(const CliOptions &options)
                   << "\" bootloader=\""
                   << (options.bootloaderPortName.empty() ? options.appPortName : options.bootloaderPortName)
                   << "\"\n";
+    }
+
+    if (!options.filePath.empty())
+    {
+        device.setFirmwarePathOverride(options.filePath, !options.versionText.empty());
+        std::cout << "Firmware file override: \"" << options.filePath << "\"\n";
     }
 
     if (options.versionText.empty())

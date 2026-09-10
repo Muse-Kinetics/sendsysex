@@ -54,6 +54,25 @@ public:
     // reports the same port name in both states even on a direct connection).
     void setPortNameOverride(const std::string &appPortName, const std::string &bootloaderPortName = std::string());
 
+    // Send @p path as the firmware payload instead of the one the family JSON
+    // resolves for the requested version. Lets --fw-update flash a freshly built
+    // image that isn't registered in the device database yet - the normal case
+    // during firmware development, where the alternative is hand-driving the
+    // enter-bootloader + raw-send sequence and reimplementing the reconnect
+    // handling this path already has.
+    //
+    // Everything else about the update is unchanged: bootloader entry, chunking,
+    // per-family transport defaults, and reconnect detection all still come from
+    // the family JSON, so an override only substitutes the bytes being sent.
+    //
+    // @p versionAsserted says whether the caller also stated which version the
+    // file contains (--fw-version). The post-update check compares the device's
+    // reported version against the *requested* version, which describes the
+    // database entry, not an arbitrary overridden file - so when the version
+    // isn't asserted that comparison is meaningless and is skipped in favour of
+    // confirming the application-mode reconnect.
+    void setFirmwarePathOverride(const std::string &path, bool versionAsserted);
+
     bool refreshPorts();
     void disconnect();
     bool setFwVersion(const version_t &version, bool forceUpdate);
@@ -146,6 +165,8 @@ private:
     IdentityMetadata identityMetadata_;
     version_t requestedFwVersion_ = {0, 0, 0, 0};
     bool requestedFwVersionValid_;
+    std::string firmwarePathOverride_;
+    bool firmwarePathOverrideVersionAsserted_ = false;
     bool forceFirmwareUpdate_;
     bool firmwareUpdatePending_;
     bool pendingIdentityRequest_;

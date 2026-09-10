@@ -211,6 +211,12 @@ void kmiDevice::disconnect()
     state_ = State::disconnected;
 }
 
+void kmiDevice::setFirmwarePathOverride(const std::string &path, bool versionAsserted)
+{
+    firmwarePathOverride_ = path;
+    firmwarePathOverrideVersionAsserted_ = versionAsserted;
+}
+
 bool kmiDevice::setDefaultFwVersion(bool forceUpdate)
 {
     if (!database_.isLoaded() && !database_.loadFamily(familyId_))
@@ -257,13 +263,25 @@ bool kmiDevice::setFwVersion(const version_t &version, bool forceUpdate)
 
     requestedFwVersion_ = version;
     forceFirmwareUpdate_ = forceUpdate;
-    requestedFwVersionValid_ = database_.isSupportedFirmwareVersion(version);
     firmwareUpdatePending_ = false;
 
-    if (!requestedFwVersionValid_)
+    // With a -f payload override the version isn't used to look anything up in the
+    // family JSON - it only states what the overriding file contains, so the
+    // post-update check can verify the device came back reporting it. Requiring it to
+    // be a registered payload version would defeat the override's purpose, which is
+    // precisely to flash a build the database doesn't know about yet.
+    if (!firmwarePathOverride_.empty())
     {
-        lastError_ = "Requested firmware version " + versionToString(version) + " was not found in the family JSON payload list for '" + familyId_ + "'.";
-        return false;
+        requestedFwVersionValid_ = true;
+    }
+    else
+    {
+        requestedFwVersionValid_ = database_.isSupportedFirmwareVersion(version);
+        if (!requestedFwVersionValid_)
+        {
+            lastError_ = "Requested firmware version " + versionToString(version) + " was not found in the family JSON payload list for '" + familyId_ + "'.";
+            return false;
+        }
     }
 
     lastError_.clear();
@@ -304,7 +322,18 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
         pollIntervalSeconds = 1;
 
     std::string firmwarePath;
-    if (!database_.getPayloadPath("firmware", &requestedFwVersion_, firmwarePath))
+    if (!firmwarePathOverride_.empty())
+    {
+        // -f with --fw-update: send this file rather than the database payload.
+        std::ifstream overrideProbe(firmwarePathOverride_, std::ios::binary);
+        if (!overrideProbe.good())
+        {
+            lastError_ = "Could not open the firmware file given with -f: " + firmwarePathOverride_;
+            return false;
+        }
+        firmwarePath = firmwarePathOverride_;
+    }
+    else if (!database_.getPayloadPath("firmware", &requestedFwVersion_, firmwarePath))
     {
         lastError_ = "Could not locate the requested firmware payload in the family JSON.";
         return false;
@@ -333,6 +362,8 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
         std::cout << "Loading \"" << peripheralPath << "\"\n";
     if (hasBootloaderEntry)
         std::cout << "Loading \"" << bootloaderEntryPath << "\"\n";
+    if (!firmwarePathOverride_.empty())
+        std::cout << "Firmware payload overridden by -f (database payload not used).\n";
     std::cout << "Loading \"" << firmwarePath << "\"\n";
 
     bool firmwareSent = false;
@@ -498,6 +529,19 @@ bool kmiDevice::runAutomaticUpdate(unsigned int chunkSize, unsigned int chunkDel
                 std::cout << "Confirmed application-mode reconnect (this family's application "
                              "firmware does not answer a standard identity request, so no version "
                              "match is performed).\n";
+                return true;
+            }
+
+            if (!firmwarePathOverride_.empty() && !firmwarePathOverrideVersionAsserted_)
+            {
+                // The requested version describes the database entry, not the file
+                // -f substituted, so comparing it against the device would fail even
+                // on a perfectly good update. Pass --fw-version alongside -f to state
+                // what the file contains and get the strict check back.
+                std::cout << "Confirmed application-mode reconnect. Device reports "
+                          << versionToString(identityMetadata_.applicationVersion)
+                          << " (no version match performed: -f overrode the payload without "
+                             "--fw-version stating its version).\n";
                 return true;
             }
 
