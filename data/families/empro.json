@@ -1,0 +1,68 @@
+{
+  "$schema": "../schemas/kmi_family.schema.json",
+  "schemaVersion": 2,
+  "id": "empro",
+  "name": "EM Pro",
+  "summary": "EM PRO Controller (malletStation Pro). Application PID LSB 0x2E (normal) or 0x2D (devMode). Normal: Control + MIDI 5-pin DI. DevMode: System + 6 additional ports.",
+  "discovery": {
+    "familyMarkers": ["malletStation Pro"],
+    "safeProbeRoles": {
+      "application": ["main"],
+      "bootloader": ["main"]
+    },
+    "avoidProbeRoles": []
+  },
+  "identity": {
+    "manufacturerId": [0, 1, 95],
+    "applicationPidLsb": [46, 45],
+    "bootloaderPidLsb": [],
+    "stateDetection": {
+      "applicationPidMsb": 0,
+      "bootloaderPidMsb": 1
+    }
+  },
+  "profiles": [
+    {
+      "id": "application",
+      "state": "application",
+      "productStrings": ["malletStation Pro"],
+      "portLayout": {
+        "style": "multi_port",
+        "inputs": [
+          { "index": 1, "role": "main",    "name": "Control" },
+          { "index": 2, "role": "din",     "name": "MIDI 5-pin DI" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main",    "name": "Control" },
+          { "index": 2, "role": "din",     "name": "MIDI 5-pin DI" }
+        ]
+      }
+    },
+    {
+      "id": "application_devmode",
+      "state": "application",
+      "productStrings": ["malletStation Pro"],
+      "portLayout": {
+        "style": "multi_port",
+        "inputs": [
+          { "index": 1, "role": "main",          "name": "System" },
+          { "index": 2, "role": "controller_ba", "name": "Controller Ba" },
+          { "index": 3, "role": "expander_a",    "name": "Expander A" },
+          { "index": 4, "role": "expander_b",    "name": "Expander B" },
+          { "index": 5, "role": "expander_c",    "name": "Expander C" },
+          { "index": 6, "role": "expansion_car", "name": "Expansion Car" },
+          { "index": 7, "role": "din",           "name": "MIDI 5-pin DI" }
+        ],
+        "outputs": [
+          { "index": 1, "role": "main",          "name": "System" },
+          { "index": 2, "role": "controller_ba", "name": "Controller Ba" },
+          { "index": 3, "role": "expander_a",    "name": "Expander A" },
+          { "index": 4, "role": "expander_b",    "name": "Expander B" },
+          { "index": 5, "role": "expander_c",    "name": "Expander C" },
+          { "index": 6, "role": "expansion_car", "name": "Expansion Car" },
+          { "index": 7, "role": "din",           "name": "MIDI 5-pin DI" }
+        ]
+      }
+    }
+  ]
+}

@@ -1,5 +1,21 @@
 # Guidelines
 
+## POLICY-00 — NEVER commit or push without explicit prior approval
+
+**Standing rule. Non-negotiable.** Do NOT run `git commit`, `git push`,
+`git merge`, `git rebase`, `git tag`, or any other history-changing
+operation without the user explicitly approving **that specific commit
+or push**, in the current turn.
+
+Approval is scoped to the **specific commit** described at the time; it
+**does not carry forward** to later work in the same session. Approval to
+edit, stage, or investigate is NOT approval to commit. Debug scaffolding
+and fix-forward tweaks need their own approval. Amending a prior commit
+needs a new approval for the amended state.
+
+Safe without asking: read, grep, edit, stage, draft commit messages as
+text. The moment you would run `git commit` — STOP.
+
 ## Code
 
 - C++11 standard (`CMAKE_CXX_STANDARD 11`). Do not use C++14/17 features.
