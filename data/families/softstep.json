@@ -27,6 +27,8 @@
     ]
   },
   "transport": {
+    "usesLegacyTrailer": true,
+    "requiresSignedCrc": true,
     "firmwareUpdateDefaults": {
       "firstGapDelayMs": 5000,
       "postDelayMs": 1000,

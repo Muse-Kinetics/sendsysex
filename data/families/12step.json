@@ -22,6 +22,9 @@
     }
   },
   "transport": {
+    "requiresSignedCrc": true,
+    "usesLegacyTrailer": true,
+    "_requiresSignedCrc_note": "Set on the same basis as SoftStep, which was proven from captured bytes and cross-checked against kmi_mdm. For 12 Step this is recorded on the firmware owner's statement and has NOT yet been verified against 12 Step firmware or hardware - confirm before relying on it.",
     "firmwareUpdateDefaults": {
       "firstGapDelayMs": 5000,
       "rebootsToAppOnFinalChunk": true,
