@@ -45,6 +45,9 @@ cat /proc/asound/seq/clients  # per-client input pool sizes (SysEx buffering)
 
 ## Build (Windows — preset)
 
+Needs a CMake that knows the `Visual Studio 17 2022` generator (~3.21+; the copy bundled with VS 2022
+works) and, for WMS, the Windows MIDI Services SDK.
+
 ```powershell
 cmake --preset windows-msvc
 cmake --build --preset windows-release
@@ -68,6 +71,7 @@ cmake --build build --config Release
 ./build/SendSysEx -n "SoftStep" -f file.syx       # send by port name
 ./build/SendSysEx --fw-update softstep            # firmware update (family is positional)
 ./build/SendSysEx --fw-update quneo --timestamp   # --timestamp prefixes every line with HH:MM:SS.mmm
+./build/SendSysEx --fw-update softstep -f image.syx --fw-version 2.0.8   # -f overrides the database payload; --fw-version keeps the version match
 ./build/SendSysEx --id-request malletstation      # print the identity reply and exit
 ./build/SendSysEx --bl-send -f trojan.syx --family softstep --verify   # bootloader-trojan install
 ```

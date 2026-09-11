@@ -51,6 +51,21 @@ bool isAlsaAddressToken(const std::string &text)
 
     return leftDigit && rightDigit;
 }
+
+// Windows gives a MIDI device whose name is already taken a "<n> - " prefix,
+// e.g. a 12 Step2 enumerating over WinMM as "2 - 12 Step2" and
+// "MIDIOUT2 (2 - 12 Step2)". The prefix is not part of the product string, so
+// it has to go before the name is looked up. Only "<digits> - " is removed:
+// product names that merely start with digits ("12 Step") are left alone.
+std::string stripWindowsDuplicateNamePrefix(const std::string &name)
+{
+    std::size_t i = 0;
+    while (i < name.size() && std::isdigit(static_cast<unsigned char>(name[i])))
+        ++i;
+    if (i > 0 && name.compare(i, 3, " - ") == 0)
+        return name.substr(i + 3);
+    return name;
+}
 }
 
 deviceDatabase::deviceDatabase()
@@ -437,7 +452,7 @@ std::string deviceDatabase::normalizeWinMM(const std::string &raw) const
         if (openParen == std::string::npos || closeParen == std::string::npos || closeParen <= openParen)
             return toLowerCopy(trimmed);
 
-        const std::string innerName = collapseWhitespaceCopy(trimCopy(trimmed.substr(openParen + 1, closeParen - openParen - 1)));
+        const std::string innerName = stripWindowsDuplicateNamePrefix(collapseWhitespaceCopy(trimCopy(trimmed.substr(openParen + 1, closeParen - openParen - 1))));
         const std::string innerLower = toLowerCopy(innerName);
 
         // If the inner name contains a named USB descriptor suffix, the canonical
@@ -463,14 +478,14 @@ std::string deviceDatabase::normalizeWinMM(const std::string &raw) const
 
             if (allDigits)
             {
-                const std::string deviceName = toLowerCopy(collapseWhitespaceCopy(trimCopy(trimmed.substr(0, lastSpace))));
+                const std::string deviceName = toLowerCopy(stripWindowsDuplicateNamePrefix(collapseWhitespaceCopy(trimCopy(trimmed.substr(0, lastSpace)))));
                 return lookupByIndex(deviceName, 1);
             }
         }
     }
 
     // Case 3: No suffix — plain device name, treat as port 1.
-    return lookupByIndex(lowered, 1);
+    return lookupByIndex(stripWindowsDuplicateNamePrefix(lowered), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -498,12 +513,12 @@ std::string deviceDatabase::normalizeWinUWP(const std::string &raw) const
         if (openParen == std::string::npos || closeParen == std::string::npos || closeParen <= openParen)
             return lowered;
 
-        const std::string innerName = toLowerCopy(collapseWhitespaceCopy(trimCopy(trimmed.substr(openParen + 1, closeParen - openParen - 1))));
+        const std::string innerName = toLowerCopy(stripWindowsDuplicateNamePrefix(collapseWhitespaceCopy(trimCopy(trimmed.substr(openParen + 1, closeParen - openParen - 1)))));
         return lookupByIndex(innerName, devicePortIndex);
     }
 
     // Case 2: Plain device name — port 1.
-    return lookupByIndex(lowered, 1);
+    return lookupByIndex(stripWindowsDuplicateNamePrefix(lowered), 1);
 }
 
 // ---------------------------------------------------------------------------

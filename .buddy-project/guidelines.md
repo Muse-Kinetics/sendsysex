@@ -48,7 +48,7 @@ text. The moment you would run `git commit` — STOP.
 
 ## Submodules
 
-- `inc/rtmidi` — KMI WMS fork. Do not update to upstream RtMidi.
+- `inc/rtmidi` — Muse-Kinetics RtMidi fork, tracked branch `sysex-send-flowcontrol` (see `.gitmodules`). Do not update to upstream RtMidi. Push a fork commit to Muse-Kinetics/rtmidi *before* pushing a sendsysex commit that pins it, or fresh clones cannot fetch the submodule.
 - `lib/MIDI_CPP` — update only with intention.
 - Always run `git submodule update --init --recursive` after cloning or pulling.
 

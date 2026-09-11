@@ -3,14 +3,15 @@ description: >-
   Cross-platform C++11 command-line utility for sending MIDI SysEx and running
   family-aware two-step bootloader firmware updates on KMI/Muse Kinetics
   hardware. Device knowledge lives in data/families/*.json; MIT-licensed public
-  repo. Uses the KMI WMS fork of RtMidi (inc/rtmidi submodule).
+  repo. Uses the Muse-Kinetics RtMidi fork (inc/rtmidi submodule, branch
+  sysex-send-flowcontrol).
 repository: git@github.com:Muse-Kinetics/sendsysex.git
 status: active
-phase: post-v0.15.0 — Linux/ALSA bootloader-install investigation
+phase: post-v0.15.0 — unreleased maintenance (device database, payloads, RtMidi WinMM fixes)
 owner: Eric Bateman <eric@musekinetics.com>
 responsible_buddy: SiliconDreams
 created: "2026-08-25"
-last_updated: "2026-09-06"
+last_updated: "2026-09-11"
 peer_buddies: []
 tags:
   - midi

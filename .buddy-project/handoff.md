@@ -6,12 +6,25 @@ SendSysEx is a C++11 CLI tool built with CMake. It has two modes:
 1. **Raw send** — send any `.syx` file to a named/numbered MIDI port
 2. **Automatic firmware update** — family-aware two-step bootloader update using JSON device/family databases
 
-## Where things stand (2026-09-06)
+It also carries the legacy bootloader-trojan install for pre-bootloader SoftStep / 12 Step units
+(`--bootloader-install`, `--bl-send`), and an interactive mode when run with no arguments.
 
-**v0.15.0 is shipped and solid on macOS and Windows.** The chunked `--fw-update` reliability work was
-validated on real hardware on **both** platforms (Windows over WMS *and* WinMM — the old release
-gate, now cleared), and `--bootloader-install` is tested and working on both for SoftStep and 12 Step.
-macOS ships a universal notarized `.pkg` installer.
+## Where things stand (2026-09-11)
+
+**v0.15.0 is the current release** (macOS universal notarized `.pkg`, Windows signed zip). `main` has
+moved on since the tag (unreleased):
+
+- **Device database and payloads:** EM Pro family; SoftStep **2.0.8** default; per-family
+  `requiresSignedCrc` / `usesLegacyTrailer` transport flags (12 Step's are unverified); `-f` payload
+  override for `--fw-update`.
+- **Bootloader-install safety and Linux:** the dump gate no longer accepts its own echoed request.
+  The Linux/ALSA send path works: the first end-to-end Linux bootloader install succeeded on
+  2026-09-06.
+- **RtMidi and port names (2026-09-11):**
+  - `inc/rtmidi` → `f3d37ae`, the WinMM send/close fixes with busy-retry removed
+  - the 12 Step WinMM port-name fix (hardware check pending)
+
+  See `current-task.md`.
 
 The four firmware-update reliability mechanisms (all tool + `data/families/*.json`, **no MIDI_CPP
 change**) are described in full in `decisions.md`:
@@ -22,67 +35,70 @@ change**) are described in full in `decisions.md`:
 - `confirmByAppReconnectOnly` — reconnect-based confirmation for EM1 firmware (MalletStation) that
   has no standard identity reply (reports version via OSC-over-SysEx only).
 
-**Open front: a safety-critical bug in the bootloader-install dump gate.** A failing
-`--bootloader-install softstep` run on Linux was root-caused (2026-09-06) — it is **not** ALSA
-gating SysEx. `captureFirmwareDump` listens on *every* MIDI input port and accepts the first
-`F0`-prefixed message, so ALSA's `Midi Through` loopback fed the tool **its own request**, which then
-**false-passed** validation (`size>10 && F0 … F7 && header`) because the request carries the same KMI
-header. The trojan was then flashed to a device whose real image was never read. Any loopback or DIN
-out-to-in cable reproduces this on macOS/Windows too. Fixes: restrict listeners to the device's ports,
-reject an echo of the request, enforce a minimum image size. See `current-task.md` / `blockers.md`.
+## Branch landscape
 
-Separately, a source-built alsa-lib in `/usr/local` (2026-09-04) shadows the distro one and breaks
-every ALSA client on this machine (`aconnect -l` included); `LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu`
-is the workaround.
+- **`main`**: the release line. v0.15.0 shipped from here.
+- **`origin/WMS`** (`56580a7`): the original WMS/RtMidi + cmake-preset branch. It ends with a
+  refactor, *"use rtmidi add_subdirectory; drop redundant WMS wiring"*, that is **not in `main`**.
+  Diverged both ways — reconcile intentionally or consciously defer; don't fast-forward blindly.
+- **`origin/bootloader_ug`** (`214c3c1`): fully merged into `main`; nothing left to reconcile.
 
-## Branch landscape (check before releasing — "a lot going on")
-
-- **`main`** (current, `34f6031`): the release line — WMS support, legacy trojan tooling, all
-  firmware payloads, the reliability fixes above, interactive mode, and the macOS `.pkg` tooling.
-  This is where v0.15.0 shipped from.
-- **`origin/WMS`** (`56580a7`): the foundational WMS/RtMidi + cmake-preset + macOS-build branch,
-  with a later refactor *"use rtmidi add_subdirectory; drop redundant WMS wiring"* that is **NOT in
-  `bootloader_ug`**. Decide whether that cmake refactor merges into the release line before tagging.
-  Diverged both ways — reconcile intentionally, don't fast-forward blindly.
+**Submodules:**
+- `inc/rtmidi` is the Muse-Kinetics RtMidi fork, tracking branch `sysex-send-flowcontrol`. That
+  branch is WMS plus CoreMIDI flow-controlled SysEx and `drain()`, `int sendMessage`, ALSA partial
+  SysEx, and (at `f3d37ae`) the WinMM fixes.
+- `lib/MIDI_CPP` is at `11f5e11`.
 
 ## Repository Layout
 
 ```
 src/          — C++ sources (SendSysEx.cpp is the entry point)
-inc/          — Headers; inc/rtmidi is a git submodule (KMI WMS fork)
-lib/MIDI_CPP  — git submodule
-data/         — Device database (kmi_device_database.json) and per-family JSONs
+inc/          — Headers; inc/rtmidi is a git submodule (Muse-Kinetics RtMidi fork)
+lib/MIDI_CPP  — git submodule; SysEx framing/CRC + device metadata (sources compiled into the binary)
+lib/json      — git submodule; nlohmann/json (header-only)
+lib/syxMfg    — git submodule; manufacturer-ID lookup
+data/         — Device database (kmi_device_database.json), per-family JSONs, schema
 syx/          — Firmware payload .syx files, organized by family
+scripts/      — helper scripts (e.g. fix-alsa-plugin-dir.sh)
 build/        — CMake build output (gitignored)
 dist/         — Release zips and checksums (gitignored)
 ```
 
 ## What's Working
 
-- All CMake builds on macOS, Windows, and Linux
-- WinMM and WMS backends (Windows): runtime probe with fallback; `--midi-backend` flag to force
-- Firmware update for: 12 Step, BopPad, K-Board, KBP4, MalletStation, MimicHub, QuNeo, QuNexus, SoftStep, SoundStation
-- SoftStep + 12 Step legacy bootloader-trojan install (`--bl-send`, `--bootloader-install <family>`) — hardware-validated on **macOS and Windows** (SoftStep v93, 12 Step v28). **Not working on Linux/ALSA** — see `blockers.md`.
-- Windows release packaging via `package-release.ps1`
+- CMake builds on macOS, Windows, and Linux.
+- **Windows backends:** WinMM and WMS, with a runtime probe and fallback. `--midi-backend` or
+  `KMI_MIDI_BACKEND=winmm` forces one.
+- **Firmware update** for: 12 Step, BopPad, EM Pro, K-Board, KBP4, MalletStation, MimicHub, QuNeo,
+  QuNexus, SoftStep, SoundStation.
+- **Legacy bootloader-trojan install** for SoftStep and 12 Step (`--bl-send`,
+  `--bootloader-install <family>`). Hardware-validated on macOS and Windows (SoftStep v93, 12 Step
+  v28). SoftStep is also validated end-to-end on Linux/ALSA (2026-09-06). On Windows,
+  `--bl-send` requires WMS.
+- **Release packaging:** `package-release.ps1` (Windows) and `package-release-macos.sh` (macOS `.pkg`).
 
 ## Key Files to Know
 
-- `src/SendSysEx.cpp` — main argument parsing, mode dispatch
-- `src/bootloaderUpgrade.cpp` / `inc/bootloaderUpgrade.h` — firmware update state machine
-- `src/deviceDatabase.cpp` — loads and queries `data/kmi_device_database.json` + family JSONs
-- `data/families/*.json` — per-family discovery, identity, transport timing
-- `inc/rtmidi` — submodule; **do not replace** — this is the KMI WMS fork
+- `src/SendSysEx.cpp` — argument parsing, mode dispatch, raw send, legacy bootloader-install flow
+- `src/kmiDevice.cpp` / `inc/kmiDevice.h` — port discovery and state, identity handling,
+  `runAutomaticUpdate()` (the `--fw-update` state machine)
+- `inc/chunkedSysExTransfer.h` — chunked send, per-chunk identity-reply handshake, whole-transfer retry
+- `src/bootloaderUpgrade.cpp` / `inc/bootloaderUpgrade.h` — legacy trojan image decode
+- `inc/bootloaderSend.h` — legacy sector-wise send (one SysEx message, timed spans)
+- `src/deviceDatabase.cpp` — loads `data/kmi_device_database.json` + family JSONs; per-backend
+  port-name normalization
+- `src/midiBackend.cpp` — Windows WMS/WinMM backend selection
+- `data/families/*.json` — per-family discovery, identity, transport timing and wire conventions
+- `inc/rtmidi` — submodule; **do not replace** with upstream RtMidi
 - `CMakeLists.txt` — version is the single source of truth
 
 ## What needs to happen next
 
-1. **Harden `captureFirmwareDump` + `runLegacyVersionQuery`** — restrict listeners to the device's
-   own ports (skip `Midi Through`/loopback), reject a capture identical to the request just sent, and
-   enforce a minimum plausible image size. Safety-critical on **all** platforms.
-2. **Clean up the `/usr/local` alsa-lib shadow**, then re-run `--bootloader-install softstep` on Linux
-   with the fixes and decide whether Linux joins the validated platform list.
-3. **Reconcile the `WMS` branch** cmake refactor (`origin/WMS` `56580a7`) into the release line, or
-   consciously defer it. See "Branch landscape" above.
+See `current-task.md` → Priority order. In short:
+1. Hardware-check 12 Step over WinMM.
+2. Verify 12 Step's CRC/trailer flags.
+3. Decide on Linux support.
+4. Reconcile `origin/WMS`.
 
 ### Release mechanics (when there is a next release)
 - Bump `project(SendSysEx VERSION X.Y.Z)` in `CMakeLists.txt` — the single source of truth — and sync
@@ -104,6 +120,10 @@ cmake --build build
 ./build/SendSysEx --help
 ```
 
+On Windows use a CMake new enough for the `Visual Studio 17 2022` generator (~3.21+). The copy
+bundled with VS 2022 works. Building with WMS needs the Windows MIDI Services SDK.
+
 ## Release Process
 
-See `RELEASING.md`. Windows only. Requires the SafeNet code-signing token (office-only).
+See `RELEASING.md` (Windows and macOS). Windows signing requires the SafeNet code-signing token
+(office-only).

@@ -2,7 +2,15 @@
 
 ## Use the KMI WMS-fork of RtMidi (not upstream RtMidi)
 
-`inc/rtmidi` is pinned to the Muse-Kinetics fork that adds Windows MIDI Services (WMS) support. This is the same fork the SoftStep editors use, so behavior is consistent. Upstream RtMidi does not support WMS. **Do not replace with upstream.**
+`inc/rtmidi` is pinned to the Muse-Kinetics RtMidi fork, which adds Windows MIDI Services (WMS) support. Upstream RtMidi does not support WMS. **Do not replace with upstream.**
+
+`.gitmodules` tracks the fork's **`sysex-send-flowcontrol`** branch (since `20b672c`; previously `WMS`). It is a superset of `WMS` that adds:
+- CoreMIDI flow-controlled `MIDISendSysex` with `drain()`
+- `int sendMessage` on every backend
+- ALSA partial-SysEx sends
+- the WinMM send/close fixes (from `f3d37ae`)
+
+The Qt editors (SoftStep, QuNeo, QuNexus, 12 Step, K-Mix) still pin the older `WMS` commit (`b79b83e`); they have not moved to this branch.
 
 ## Both WinMM and WMS compiled into every Windows build
 
@@ -42,9 +50,9 @@ macOS releases ship a **universal** (arm64 + x86_64) notarized **`.pkg`** built 
   `APPLE_KEYCHAIN_PROFILE`) or `KMI_*` overrides - no Apple ID, password, or
   profile secret is stored in the repo. Full steps in `RELEASING.md` → macOS.
 
-## Windows-only release packaging script
+## Release packaging scripts
 
-`package-release.ps1` handles the Windows build/stage/zip/checksum workflow. macOS releases require a manual process (documented in README, no script yet). The repo lives in a Dropbox-synced folder, which caused Dropbox locking issues during zip — staging happens in a temp dir outside the repo to avoid this.
+`package-release.ps1` handles the Windows build/stage/zip/checksum workflow; `package-release-macos.sh` builds the macOS `.pkg` (see above). The repo lives in a Dropbox-synced folder, which caused Dropbox locking issues during zip — Windows staging happens in a temp dir outside the repo to avoid this.
 
 ## No automated test suite
 
@@ -160,4 +168,50 @@ machine but have not been exercised on hardware.
 SoftStep legacy v93 → 100/100 sectors with **zero** `incomplete message!` errors → `VERIFY OK`,
 bootloader v1.0.0 → `--fw-update softstep` 290/290 chunks all ACKed → **application v2.0.7 confirmed**.
 Re-verified after the rework to the no-API-change form: two further full `--fw-update` round trips
-(2.0.7 → 2.0.6 → 2.0.7, 289/289 chunks each) plus `--id-request`, all clean.
+(2.0.7 → 2.0.6 → 2.0.7, 289/289 chunks each) plus `--id-request`, all clean. Committed as `4eeb27b`
+(fork commit `edb5985`).
+
+## Per-family SysEx CRC and trailer conventions are recorded, not inferred (2026-09-10, `c08c9a8`)
+
+Two wire quirks cannot be detected from a device, so they live in `transport` in the family JSON,
+following the `requiresFlushAfterPreamble` pattern:
+
+- **`requiresSignedCrc`:** the firmware computes the packet CRC over signed chars, so any byte
+  ≥ 0x80 diverges from the unsigned calculation. It applies in both directions.
+- **`usesLegacyTrailer`:** describes what the device *transmits*. The preamble length is the payload
+  length alone, followed by a bare 2-byte CRC with no next-length field.
+
+The requirement tracks who wrote the firmware, not the MCU, so each product has to be confirmed
+individually:
+- **SoftStep:** proven from captured bytes and cross-checked against kmi_mdm.
+- **12 Step:** set on the firmware owner's statement and **not yet verified**.
+
+`lib/MIDI_CPP` `11f5e11` provides the matching `setSignedCrc()` / `setTrailerFormat()` API. SendSysEx
+itself does not read these flags yet.
+
+## WinMM: no busy-retry inside `sendMessage`; callers own retry (2026-09-11, fork `f3d37ae`)
+
+The fork used to retry `midiOutLongMsg` for up to ~2 s on `MIDIERR_NOTREADY` or `MMSYSERR_ERROR`.
+The retry was removed when the WinMM send-path fixes merged in. Reasons:
+
+1. **Resending isn't always safe.** A generic `MMSYSERR_ERROR` can follow a span that partly went
+   out. Resending it mid-SysEx can corrupt a firmware stream, and only the caller knows whether a
+   resend is safe.
+2. **The caller can already see the failure.** `sendMessage` returns `int` (-1 on error), and throws
+   when no error callback is set, so there's no need to hide a multi-second stall in the library.
+3. **SendSysEx already retries safely.** `sendChunkedFileWithRetry` in `chunkedSysExTransfer.h`
+   restarts the whole transfer from `F0`. In the 2026-09-10 hardware runs, the first send to a
+   freshly booted bootloader was sometimes rejected (`MMRESULT 1`), and that retry recovered it.
+   QuNexus and SoftStep firmware updates over WinMM completed without the library retry. The only
+   exceptions were deliberate cable pulls and one run cut short by the #376 input-close crash,
+   which is fixed in the same update.
+
+## Windows port names: strip the `<n> - ` duplicate-name prefix (2026-09-11)
+
+When a MIDI device name is already taken, Windows prefixes the next one with `<n> - `, for example
+a 12 Step2 over WinMM as `2 - 12 Step2 8` and `MIDIOUT2 (2 - 12 Step2) 12`. The prefix is not part
+of the USB product string, so `normalizeWinMM` / `normalizeWinUWP` strip a leading `<digits> - `
+before lookup.
+
+Names that merely start with digits, like "12 Step", are untouched. The WMS normalizer is unchanged,
+because WMS endpoint names don't carry the prefix.
