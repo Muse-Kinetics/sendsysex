@@ -158,9 +158,18 @@
       "version": "2.0.7",
       "path": "syx/SoftStep/Softstep_Firmware_v2.0.7-cs512.syx",
       "hardware": ["softstep1", "softstep2", "softstep3"],
+      "notes": ["Superseded by firmware_2_0_8.", "Adds a 1-second boot-time tare capture for key sensors (margined +25%, clamped) to reduce stuck-key false triggers, and enforces off_sense >= on_sense/2 for all keys and the nav pad. The tare was subtracted in every mode, including the tether calibration modes, which is fixed in 2.0.8."]
+    },
+    {
+      "id": "firmware_2_0_8",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.0.8",
+      "path": "syx/SoftStep/Softstep_Firmware_v2.0.8-cs512.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
       "default": true,
       "latest": true,
-      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging.", "Adds a 1-second boot-time tare capture for key sensors (margined +25%, clamped) to reduce stuck-key false triggers, and enforces off_sense >= on_sense/2 for all keys and the nav pad."]
+      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging.", "Tether calibration modes (LIVE/PEAK/MIN) stream raw ADC again: 2.0.7 subtracted the boot tare in every mode. Normal play and HOSTED keep the tare, so the stuck-key mitigation is unchanged.", "Adds host read-back: REQUEST_PRESET takes a preset index and returns that preset's stored-length PRESET_IMAGE, REQUEST_SETTINGS returns the whole 112-byte SETTINGS struct, and REQ_GLOBALS_PI returns GLOBALS plus PRESET_INFO (active preset, standalone/nav/scene-change flags, persisted tether mode, num_presets)."]
     },
     {
       "id": "reset_presets_2_0_5",
