@@ -24,7 +24,8 @@
   "transport": {
     "requiresSignedCrc": true,
     "usesLegacyTrailer": true,
-    "_requiresSignedCrc_note": "Set on the same basis as SoftStep, which was proven from captured bytes and cross-checked against kmi_mdm. For 12 Step this is recorded on the firmware owner's statement and has NOT yet been verified against 12 Step firmware or hardware - confirm before relying on it.",
+    "_requiresSignedCrc_note": "Verified against the 12 Step firmware source (12-step-firmware/firmware/Main/utils.c): crc_byte() takes `char val`, which is signed on C51, so any byte >= 0x80 sign-extends and the CRC diverges from the unsigned calculation. That file carries an explicit note that SoftStep and 12 Step do this and that QuNexus, QuNeo, BopPad, K-Mix, K-Board and KBP4 do not.",
+    "_usesLegacyTrailer_note": "Verified against the 12 Step firmware source (12-step-firmware/firmware/MIDI/MIDI_sysex_tx.c): sendSyxFormattedMessage() encodes the payload length alone into the preamble and then emits a bare 2-byte payload CRC, with no next-length field. Receive-side only - the firmware's own receiver still expects the modern 4-byte TAIL.",
     "firmwareUpdateDefaults": {
       "firstGapDelayMs": 5000,
       "rebootsToAppOnFinalChunk": true,
@@ -82,12 +83,27 @@
       "version": "1.0.9",
       "path": "syx/12Step/12 Step Firmware v1.0.9_cs512.syx",
       "hardware": ["12step1", "12step2"],
-      "default": true,
-      "latest": true,
       "notes": [
+        "Superseded by firmware_1_0_10.",
         "Chunk-safe (-cs512) packaging via the shared Hex_to_SysEx tool, built from 12-step-firmware's SysEx_and_Hex_Images/make_sysex_app.ps1.",
         "Addressed with product ID 21 (0x15, the bootloader's own PID) rather than either application hardware revision's PID (20/22), so it works unmodified for both 12step1 and 12step2.",
         "Adds a 1-second boot-time tare capture for key/select sensors (margined +25%, clamped to 2/3 of the usable range) to reduce stuck-key false triggers, and raises the default on/off pressure thresholds (20/15) with an enforced off >= on/2 floor."
+      ]
+    },
+    {
+      "id": "firmware_1_0_10",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "1.0.10",
+      "path": "syx/12Step/12 Step Firmware v1.0.10_cs512.syx",
+      "hardware": ["12step1", "12step2"],
+      "default": true,
+      "latest": true,
+      "notes": [
+        "Preferred current 12 Step firmware image. Chunk-safe (-cs512) packaging, addressed with product ID 21 (0x15, the bootloader's own PID) so it works unmodified for both 12step1 and 12step2.",
+        "The 1.0.9 boot-tare capture no longer stops while a tether calibration mode is active, so enabling tether within the first second after boot can no longer leave a partial tare in place for the rest of the session. The tare subtraction and calibration remap are still bypassed in tether, which is what makes the calibration modes stream raw ADC.",
+        "Adds host read-back: REQUEST_PRESET takes a preset index and returns that preset's stored-length PRESET_IMAGE, REQUEST_SETTINGS returns the whole SETTINGS struct, and REQ_GLOBALS_PI returns GLOBALS plus PRESET_INFO (active preset, standalone/tether state, num_presets).",
+        "Adds LOAD_FACTORY_PRESETS (legacy type 13) and RESET_SETTINGS (legacy type 14), matching SoftStep's numbering, so a host can restore the shipped setlist or the shipped settings without erasing the serial number."
       ]
     }
   ],
