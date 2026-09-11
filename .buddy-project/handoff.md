@@ -22,7 +22,7 @@ moved on since the tag (unreleased):
   2026-09-06.
 - **RtMidi and port names (2026-09-11):**
   - `inc/rtmidi` → `f3d37ae`, the WinMM send/close fixes with busy-retry removed
-  - the 12 Step WinMM port-name fix (hardware check pending)
+  - the 12 Step WinMM port-name fix
 
   See `current-task.md`.
 
@@ -95,10 +95,9 @@ dist/         — Release zips and checksums (gitignored)
 ## What needs to happen next
 
 See `current-task.md` → Priority order. In short:
-1. Hardware-check 12 Step over WinMM.
-2. Verify 12 Step's CRC/trailer flags.
-3. Decide on Linux support.
-4. Reconcile `origin/WMS`.
+1. Verify 12 Step's CRC/trailer flags.
+2. Decide on Linux support.
+3. Reconcile `origin/WMS`.
 
 ### Release mechanics (when there is a next release)
 - Bump `project(SendSysEx VERSION X.Y.Z)` in `CMakeLists.txt` — the single source of truth — and sync

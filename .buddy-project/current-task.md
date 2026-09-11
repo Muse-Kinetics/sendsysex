@@ -37,7 +37,6 @@ since the v0.15.0 tag.
    - **Fix:** they now strip `<digits> - `.
    - **Verified offline:** the four names this machine reported now map to control surface /
      TRS MIDI out / CV out. SoftStep, 12 Step gen 1 and other devices are unchanged.
-   - **Hardware check still pending:** `--id-request 12step --midi-backend winmm`.
 
 ### Recently landed on `main`
 
@@ -57,11 +56,10 @@ since the v0.15.0 tag.
 
 ### Priority order (next)
 
-1. **Hardware-check the 12 Step fix** over WinMM when a 12 Step is attached.
-2. **Verify 12 Step `requiresSignedCrc` / `usesLegacyTrailer`** against 12 Step firmware or hardware.
-3. **Decide whether Linux joins the supported platform list.** The full path works; it is a
+1. **Verify 12 Step `requiresSignedCrc` / `usesLegacyTrailer`** against 12 Step firmware or hardware.
+2. **Decide whether Linux joins the supported platform list.** The full path works; it is a
    packaging/support-policy call.
-4. **Reconcile the `WMS` branch** (`origin/WMS`, `56580a7`, cmake/rtmidi refactor, not in `main`).
+3. **Reconcile the `WMS` branch** (`origin/WMS`, `56580a7`, cmake/rtmidi refactor, not in `main`).
    Merge it or consciously defer. `origin/bootloader_ug` is fully merged into `main`.
 
 ### Phase

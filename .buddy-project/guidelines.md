@@ -55,7 +55,7 @@ text. The moment you would run `git commit` — STOP.
 ## Commits
 
 - Commit messages are imperative present-tense and specific (e.g., "Add SoftStep v2.0.7 payload").
-- Include Co-authored-by trailer for agent commits.
+- Do not add Co-authored-by or other AI-attribution trailers (e.g. `Co-Authored-By: Claude …`, `Claude-Session: …`) to commits.
 
 ## Project State Files
 

@@ -24,7 +24,7 @@ fixtures. **Needs:** hardware test rig decision from the team.
   windows whose last window was that short left the device in its bootloader (`MMSYSERR_INVALPARAM`
   on every attempt). Fixed in the same RtMidi update.
 - **12 Step not discovered over WinMM.** Windows' `<n> - ` duplicate-name prefix defeated port-name
-  normalization. Fixed in `src/deviceDatabase.cpp`; the hardware check is still pending.
+  normalization. Fixed in `src/deviceDatabase.cpp`.
 
 ## Resolved
 
