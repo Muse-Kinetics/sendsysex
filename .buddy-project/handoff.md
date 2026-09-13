@@ -14,15 +14,19 @@ It also carries the legacy bootloader-trojan install for pre-bootloader SoftStep
 **v0.15.0 is the current release** (macOS universal notarized `.pkg`, Windows signed zip). `main` has
 moved on since the tag (unreleased):
 
-- **Device database and payloads:** EM Pro family; SoftStep **2.0.8** default; per-family
-  `requiresSignedCrc` / `usesLegacyTrailer` transport flags (12 Step's are unverified); `-f` payload
-  override for `--fw-update`.
+- **Device database and payloads:** EM Pro family; SoftStep **2.0.8** and 12 Step **1.0.10**
+  defaults; per-family `requiresSignedCrc` / `usesLegacyTrailer` transport flags (SoftStep proven
+  from captured bytes, 12 Step verified against its firmware source); `-f` payload override for
+  `--fw-update`.
 - **Bootloader-install safety and Linux:** the dump gate no longer accepts its own echoed request.
   The Linux/ALSA send path works: the first end-to-end Linux bootloader install succeeded on
   2026-09-06.
-- **RtMidi and port names (2026-09-11):**
-  - `inc/rtmidi` → `f3d37ae`, the WinMM send/close fixes with busy-retry removed
-  - the 12 Step WinMM port-name fix
+- **RtMidi and port names:**
+  - `inc/rtmidi` → `cd25104` (2026-09-13): the WinMM send/close fixes with busy-retry removed, the
+    Windows MIDI Services backend review fixes, and WMS port names that identify their device
+  - the 12 Step port-name fix for WinMM/UWP, and the same `<n> - ` prefix stripping for WMS
+  - `--app-port` without `--bootloader-port` no longer hangs the bootloader stage
+  - firmware updates hardware-verified over `--midi-backend wms` on QuNexus, SoftStep and 12 Step
 
   See `current-task.md`.
 
@@ -46,8 +50,9 @@ change**) are described in full in `decisions.md`:
 **Submodules:**
 - `inc/rtmidi` is the Muse-Kinetics RtMidi fork, tracking branch `sysex-send-flowcontrol`. That
   branch is WMS plus CoreMIDI flow-controlled SysEx and `drain()`, `int sendMessage`, ALSA partial
-  SysEx, and (at `f3d37ae`) the WinMM fixes.
-- `lib/MIDI_CPP` is at `11f5e11`.
+  SysEx, and (`f3d37ae`, `f90f98e`) the WinMM fixes.
+- `lib/MIDI_CPP` is at `dec4b78`, whose own nested `examples/rtmidi` pins `04155bb` — one commit
+  behind `inc/rtmidi` (`cd25104`). SendSysEx does not build that copy.
 
 ## Repository Layout
 
@@ -95,9 +100,8 @@ dist/         — Release zips and checksums (gitignored)
 ## What needs to happen next
 
 See `current-task.md` → Priority order. In short:
-1. Verify 12 Step's CRC/trailer flags.
-2. Decide on Linux support.
-3. Reconcile `origin/WMS`.
+1. Decide on Linux support.
+2. Reconcile `origin/WMS`.
 
 ### Release mechanics (when there is a next release)
 - Bump `project(SendSysEx VERSION X.Y.Z)` in `CMakeLists.txt` — the single source of truth — and sync

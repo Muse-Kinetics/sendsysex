@@ -100,7 +100,12 @@ void kmiDevice::setPortNameOverride(const std::string &appPortName, const std::s
 {
     portNameOverrideActive_ = !appPortName.empty();
     overrideAppPortName_ = appPortName;
-    overrideBootloaderPortName_ = bootloaderPortName.empty() ? appPortName : bootloaderPortName;
+    // Deliberately left empty when the caller gave no bootloader name. Reusing
+    // the application name makes the bootloader stage wait for a port that
+    // disappeared the moment the device rebooted into its bootloader identity,
+    // which looks like a hang. refreshPorts() falls back to the family's own
+    // bootloader matching instead.
+    overrideBootloaderPortName_ = bootloaderPortName;
 }
 
 bool kmiDevice::refreshPorts()
@@ -115,7 +120,10 @@ bool kmiDevice::refreshPorts()
     familyPresent_ = false;
     lastError_.clear();
 
-    if (!portNameOverrideActive_ && !database_.isLoaded() && !database_.loadFamily(familyId_))
+    // The family definition is loaded even when an explicit port-name override
+    // is active: the override itself does not need it, but the bootloader-name
+    // fallback below does. Failing to load is only fatal without an override.
+    if (!database_.isLoaded() && !database_.loadFamily(familyId_) && !portNameOverrideActive_)
     {
         // If the JSON file simply doesn't exist, fall back to probe-only mode:
         // match any port whose raw name contains the family id as a substring.
@@ -154,12 +162,22 @@ bool kmiDevice::refreshPorts()
         // visible depending on what's currently attached and its state -
         // app/bootloader disambiguation itself still happens later via the
         // identity reply's PID MSB (handleIdentityStateUpdate()), not here.
+        // With no explicit bootloader name, let the family's own bootloader
+        // matching cover that state: a device in bootloader mode is a different
+        // USB product with its own port name, which the application override
+        // can never match.
+        const bool bootloaderByFamily = overrideBootloaderPortName_.empty() && database_.isLoaded();
+
         for (std::size_t i = 0; i < visibleInputPorts_.size(); ++i)
-            if (visibleInputPorts_[i] == overrideAppPortName_ || visibleInputPorts_[i] == overrideBootloaderPortName_)
+            if (visibleInputPorts_[i] == overrideAppPortName_
+                || (!overrideBootloaderPortName_.empty() && visibleInputPorts_[i] == overrideBootloaderPortName_)
+                || (bootloaderByFamily && database_.isBootloaderPort(visibleInputPorts_[i])))
                 matchedInputPorts_.push_back(visibleInputPorts_[i]);
 
         for (std::size_t i = 0; i < visibleOutputPorts_.size(); ++i)
-            if (visibleOutputPorts_[i] == overrideAppPortName_ || visibleOutputPorts_[i] == overrideBootloaderPortName_)
+            if (visibleOutputPorts_[i] == overrideAppPortName_
+                || (!overrideBootloaderPortName_.empty() && visibleOutputPorts_[i] == overrideBootloaderPortName_)
+                || (bootloaderByFamily && database_.isBootloaderPort(visibleOutputPorts_[i])))
                 matchedOutputPorts_.push_back(visibleOutputPorts_[i]);
     }
     else

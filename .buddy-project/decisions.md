@@ -8,7 +8,7 @@
 - CoreMIDI flow-controlled `MIDISendSysex` with `drain()`
 - `int sendMessage` on every backend
 - ALSA partial-SysEx sends
-- the WinMM send/close fixes (from `f3d37ae`)
+- the WinMM send/close fixes (`f3d37ae`, `f90f98e`)
 
 The Qt editors (SoftStep, QuNeo, QuNexus, 12 Step, K-Mix) still pin the older `WMS` commit (`b79b83e`); they have not moved to this branch.
 
@@ -184,7 +184,8 @@ following the `requiresFlushAfterPreamble` pattern:
 The requirement tracks who wrote the firmware, not the MCU, so each product has to be confirmed
 individually:
 - **SoftStep:** proven from captured bytes and cross-checked against kmi_mdm.
-- **12 Step:** set on the firmware owner's statement and **not yet verified**.
+- **12 Step:** verified against the 12 Step firmware source (`e775eab`). `crc_byte()` takes a signed
+  `char`, and `sendSyxFormattedMessage()` emits the legacy trailer.
 
 `lib/MIDI_CPP` `11f5e11` provides the matching `setSignedCrc()` / `setTrailerFormat()` API. SendSysEx
 itself does not read these flags yet.

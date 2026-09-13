@@ -13,13 +13,13 @@ fixtures. **Needs:** hardware test rig decision from the team.
 
 ---
 
-## Fixed 2026-09-11 (RtMidi fork `f3d37ae`, `src/deviceDatabase.cpp`)
+## Fixed 2026-09-11 (RtMidi fork `f3d37ae` / `f90f98e`, `src/deviceDatabase.cpp`)
 
 - **WinMM: process crash when a device reboots or disappears with an input port open.**
   - **Symptom:** `MidiInWinMM::closePort()` left its lock held and `connected_` set, then the
     destructor freed the same SysEx buffers a second time. The process died with `0xC0000409`.
   - **When:** at the end of `--fw-update` on the QuNexus, and once after a plain first-send failure.
-  - **Fix:** in the RtMidi fork, `inc/rtmidi` → `f3d37ae`. See `current-task.md`.
+  - **Fix:** in the RtMidi fork, `inc/rtmidi` → `f90f98e`. See `current-task.md`.
 - **WinMM: SysEx final span of 1–3 bytes never reached the device.** A firmware image sent in
   windows whose last window was that short left the device in its bootloader (`MMSYSERR_INVALPARAM`
   on every attempt). Fixed in the same RtMidi update.

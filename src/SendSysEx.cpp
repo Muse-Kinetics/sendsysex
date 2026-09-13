@@ -1203,10 +1203,11 @@ int runAutomaticProcess(const CliOptions &options)
     if (!options.appPortName.empty())
     {
         device.setPortNameOverride(options.appPortName, options.bootloaderPortName);
-        std::cout << "Port name override active: app=\"" << options.appPortName
-                  << "\" bootloader=\""
-                  << (options.bootloaderPortName.empty() ? options.appPortName : options.bootloaderPortName)
-                  << "\"\n";
+        std::cout << "Port name override active: app=\"" << options.appPortName << "\" bootloader=";
+        if (options.bootloaderPortName.empty())
+            std::cout << "(family discovery)\n";
+        else
+            std::cout << "\"" << options.bootloaderPortName << "\"\n";
     }
 
     if (!options.filePath.empty())

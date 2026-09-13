@@ -66,6 +66,24 @@ std::string stripWindowsDuplicateNamePrefix(const std::string &name)
         return name.substr(i + 3);
     return name;
 }
+
+// Windows MIDI Services builds a group terminal block name from the device name
+// and the driver's pin name, so a renamed device carries the prefix in both
+// halves: a 12 Step2 whose name is already taken reports its blocks as
+// "2 - Control Surface" and "2 - 12 Step2 2 - TRS MIDI Out" (hardware-confirmed;
+// the driver's own pin names are "Control Surface" / "TRS MIDI Out"). Strip the
+// prefix wherever it appears, not only at the front.
+std::string stripWindowsDuplicateNamePrefixes(const std::string &name)
+{
+    std::string out = stripWindowsDuplicateNamePrefix(name);
+    std::string::size_type pos = 0;
+    while ((pos = out.find(' ', pos)) != std::string::npos)
+    {
+        out = out.substr(0, pos + 1) + stripWindowsDuplicateNamePrefix(out.substr(pos + 1));
+        ++pos;
+    }
+    return out;
+}
 }
 
 deviceDatabase::deviceDatabase()
@@ -541,6 +559,11 @@ std::string deviceDatabase::normalizeWinUWP(const std::string &raw) const
 std::string deviceDatabase::normalizeCoreAudioMIDI(const std::string &raw) const
 {
     std::string work = collapseWhitespaceCopy(trimCopy(raw));
+
+    // A WMS block name can carry Windows' "<n> - " duplicate-name prefix in
+    // either half, so remove it before anything is looked up. Harmless on
+    // macOS, where CoreMIDI never adds one.
+    work = stripWindowsDuplicateNamePrefixes(work);
 
     // Normalize Spanish "Puerto" / "Peurto" to "Port".
     {
