@@ -560,11 +560,6 @@ std::string deviceDatabase::normalizeCoreAudioMIDI(const std::string &raw) const
 {
     std::string work = collapseWhitespaceCopy(trimCopy(raw));
 
-    // A WMS block name can carry Windows' "<n> - " duplicate-name prefix in
-    // either half, so remove it before anything is looked up. Harmless on
-    // macOS, where CoreMIDI never adds one.
-    work = stripWindowsDuplicateNamePrefixes(work);
-
     // Normalize Spanish "Puerto" / "Peurto" to "Port".
     {
         std::string::size_type pos = std::string::npos;
@@ -683,6 +678,20 @@ std::string deviceDatabase::normalizeAlsa(const std::string &raw) const
 }
 
 // ---------------------------------------------------------------------------
+// Windows MIDI Services normalizer
+//
+// A WMS port name has the same "ProductName PortName" shape CoreMIDI uses, so
+// the parse itself is shared. What is not shared is Windows' "<n> - "
+// duplicate-name prefix, which WMS can carry in either half of a composed block
+// name ("2 - 12 Step2 2 - TRS MIDI Out"). Stripping it here rather than inside
+// normalizeCoreAudioMIDI() keeps the macOS path exactly as it was.
+// ---------------------------------------------------------------------------
+std::string deviceDatabase::normalizeWindowsMidiServices(const std::string &raw) const
+{
+    return normalizeCoreAudioMIDI(stripWindowsDuplicateNamePrefixes(raw));
+}
+
+// ---------------------------------------------------------------------------
 // Public dispatch entry point
 // ---------------------------------------------------------------------------
 std::string deviceDatabase::normalizePortName(const std::string &rawPortName) const
@@ -700,7 +709,7 @@ std::string deviceDatabase::normalizePortName(const std::string &rawPortName) co
             // same shape CoreMIDI uses on macOS, and unlike WinMM's
             // positional scheme ("SoftStep" for port 1, "MIDIIN2 (SoftStep)"
             // for port 2+). normalizeWinMM() cannot parse this shape.
-            return normalizeCoreAudioMIDI(rawPortName);
+            return normalizeWindowsMidiServices(rawPortName);
         case RtMidi::MACOSX_CORE:
             return normalizeCoreAudioMIDI(rawPortName);
         case RtMidi::LINUX_ALSA:

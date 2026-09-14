@@ -122,6 +122,9 @@ private:
     std::string normalizeWinMM(const std::string &raw) const;
     std::string normalizeWinUWP(const std::string &raw) const;
     std::string normalizeCoreAudioMIDI(const std::string &raw) const;
+    // Windows MIDI Services: CoreMIDI's shape plus Windows' duplicate-name
+    // prefix. Kept separate so the macOS path stays untouched.
+    std::string normalizeWindowsMidiServices(const std::string &raw) const;
     std::string normalizeAlsa(const std::string &raw) const;
 
     // Resolve a (productStringLower, 1-based devicePortIndex) pair to a canonical name.
