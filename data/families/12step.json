@@ -103,7 +103,7 @@
         "Preferred current 12 Step firmware image. Chunk-safe (-cs512) packaging, addressed with product ID 21 (0x15, the bootloader's own PID) so it works unmodified for both 12step1 and 12step2.",
         "The 1.0.9 boot-tare capture no longer stops while a tether calibration mode is active, so enabling tether within the first second after boot can no longer leave a partial tare in place for the rest of the session. The tare subtraction and calibration remap are still bypassed in tether, which is what makes the calibration modes stream raw ADC.",
         "Adds host read-back: REQUEST_PRESET takes a preset index and returns that preset's stored-length PRESET_IMAGE, REQUEST_SETTINGS returns the whole SETTINGS struct, and REQ_GLOBALS_PI returns GLOBALS plus PRESET_INFO (active preset, standalone/tether state, num_presets).",
-        "Adds LOAD_FACTORY_PRESETS (legacy type 13) and RESET_SETTINGS (legacy type 14), matching SoftStep's numbering, so a host can restore the shipped setlist or the shipped settings without erasing the serial number."
+        "Adds LOAD_FACTORY_PRESETS (legacy type 13) and RESET_SETTINGS (legacy type 14), matching SoftStep's numbering, so a host can restore the shipped setlist or the shipped settings without erasing the serial number.", "Adds REQUEST_TARE/TARE_PAYLOAD (calibration category, types 7/8): the stored boot tare after its margin and clamp, as {channel, tare} for all 29 scan slots, as the reference for a live raw-data visualizer. Tare capture is unchanged. TETHER_MIN also transmits again - its force-transmit sentinel collided with min's reset value, so on a unit resting at 0 the mode sent nothing."
       ]
     }
   ],

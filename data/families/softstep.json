@@ -169,7 +169,7 @@
       "hardware": ["softstep1", "softstep2", "softstep3"],
       "default": true,
       "latest": true,
-      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging.", "Tether calibration modes (LIVE/PEAK/MIN) stream raw ADC again: 2.0.7 subtracted the boot tare in every mode. Normal play and HOSTED keep the tare, so the stuck-key mitigation is unchanged.", "Adds host read-back: REQUEST_PRESET takes a preset index and returns that preset's stored-length PRESET_IMAGE, REQUEST_SETTINGS returns the whole 112-byte SETTINGS struct, and REQ_GLOBALS_PI returns GLOBALS plus PRESET_INFO (active preset, standalone/nav/scene-change flags, persisted tether mode, num_presets)."]
+      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging.", "Tether calibration modes (LIVE/PEAK/MIN) stream raw ADC again: 2.0.7 subtracted the boot tare in every mode. Normal play and HOSTED keep the tare, so the stuck-key mitigation is unchanged.", "Adds host read-back: REQUEST_PRESET takes a preset index and returns that preset's stored-length PRESET_IMAGE, REQUEST_SETTINGS returns the whole 112-byte SETTINGS struct, and REQ_GLOBALS_PI returns GLOBALS plus PRESET_INFO (active preset, standalone/nav/scene-change flags, persisted tether mode, num_presets).", "Adds REQUEST_TARE/TARE_PAYLOAD (calibration category, types 7/8, same as 12 Step): the stored boot tare after its margin and clamp, as {channel, tare} for all 49 scan slots; channel-0 pairs are scan placeholders. Tare capture is unchanged. Verified 23/23 on a SoftStep 3."]
     },
     {
       "id": "reset_presets_2_0_5",
