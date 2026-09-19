@@ -167,9 +167,18 @@
       "version": "2.0.8",
       "path": "syx/SoftStep/Softstep_Firmware_v2.0.8-cs512.syx",
       "hardware": ["softstep1", "softstep2", "softstep3"],
+      "notes": ["Superseded by firmware_2_0_9. Chunk-safe (-cs512) packaging.", "Tether calibration modes (LIVE/PEAK/MIN) stream raw ADC again: 2.0.7 subtracted the boot tare in every mode. Normal play and HOSTED keep the tare, so the stuck-key mitigation is unchanged.", "Adds host read-back: REQUEST_PRESET takes a preset index and returns that preset's stored-length PRESET_IMAGE, REQUEST_SETTINGS returns the whole 112-byte SETTINGS struct, and REQ_GLOBALS_PI returns GLOBALS plus PRESET_INFO (active preset, standalone/nav/scene-change flags, persisted tether mode, num_presets).", "Adds REQUEST_TARE/TARE_PAYLOAD (calibration category, types 7/8, same as 12 Step): the stored boot tare after its margin and clamp, as {channel, tare} for all 49 scan slots; channel-0 pairs are scan placeholders. Tare capture is unchanged. Verified 26/26 on a SoftStep 3."]
+    },
+    {
+      "id": "firmware_2_0_9",
+      "type": "firmware",
+      "targetState": "bootloader",
+      "version": "2.0.9",
+      "path": "syx/SoftStep/Softstep_Firmware_v2.0.9-cs512.syx",
+      "hardware": ["softstep1", "softstep2", "softstep3"],
       "default": true,
       "latest": true,
-      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging.", "Tether calibration modes (LIVE/PEAK/MIN) stream raw ADC again: 2.0.7 subtracted the boot tare in every mode. Normal play and HOSTED keep the tare, so the stuck-key mitigation is unchanged.", "Adds host read-back: REQUEST_PRESET takes a preset index and returns that preset's stored-length PRESET_IMAGE, REQUEST_SETTINGS returns the whole 112-byte SETTINGS struct, and REQ_GLOBALS_PI returns GLOBALS plus PRESET_INFO (active preset, standalone/nav/scene-change flags, persisted tether mode, num_presets).", "Adds REQUEST_TARE/TARE_PAYLOAD (calibration category, types 7/8, same as 12 Step): the stored boot tare after its margin and clamp, as {channel, tare} for all 49 scan slots; channel-0 pairs are scan placeholders. Tare capture is unchanged. Verified 23/23 on a SoftStep 3."]
+      "notes": ["Preferred current SoftStep firmware image. Chunk-safe (-cs512) packaging.", "Each hardware revision now reports its own USB and MIDI product ID: SS1 = 10, SS2 = 11, SS3 = 13. Before 2.0.9 an SS1 and an SS2 both reported MIDI PID 11 and USB PID 12, so a host could not tell them apart. The revision is read from board pins at boot, so it cannot be changed by reflashing.", "Upgrading an SS1 or SS2 therefore changes how it enumerates on USB (1f38:000a / 1f38:000b instead of 1f38:000c). Both are already on the mkultra VM passthrough allowlist.", "Verified on a SoftStep 2: USB moved 000C -> 000B, MIDI reports 0x0B, and the 26-test hardware suite passes. SS1 is unverified - no SS1 board was available."]
     },
     {
       "id": "reset_presets_2_0_5",
