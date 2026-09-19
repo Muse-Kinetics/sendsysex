@@ -75,8 +75,23 @@ commit behind `inc/rtmidi` again. SendSysEx does not build that copy.
    - **Verified offline:** the four names this machine reported now map to control surface /
      TRS MIDI out / CV out. SoftStep, 12 Step gen 1 and other devices are unchanged.
 
+### Uncommitted in this checkout (12 Step 1.1.0)
+
+- `syx/12Step/12 Step Firmware v1.1.0_cs512.syx` (new, 90220 bytes) and `data/families/12step.json`.
+  `firmware_1_1_0` takes default/latest, `firmware_1_0_10` is marked superseded, and
+  `identity.applicationPidLsb` becomes `[19, 20, 22]`.
+- 1.1.0 is 1.0.10 renumbered - the 12 Step display cannot show a two-digit field - plus one wire
+  change: a 12 Step 1 now reports MIDI product ID 19 (0x13) to match the USB product ID it has
+  enumerated with since 1.0.9. 20 stays in the list for units still on older firmware. A host
+  addressing a unit should send 22, which every version accepts.
+- Flashed and verified on a 12 Step 2 (reports 0x16, application 1.1.0, 28/28 host suite).
+
 ### Recently landed on `main`
 
+- `de23acc` — SoftStep **2.0.9** is the default/latest payload: each hardware revision reports
+  its own USB and MIDI product ID (SS1 = 10, SS2 = 11, SS3 = 13), so an SS1 and an SS2 are
+  finally distinguishable on the wire. Verified on a SoftStep 2 (USB 000C -> 000B, MIDI 0x0B,
+  26-test suite green). 2.0.8 is marked superseded.
 - `e775eab` / `678ab5c` — 12 Step firmware **1.0.10** is the default payload: tether tare fix,
   preset/settings/globals read-back, factory-preset and settings reset commands. `678ab5c` rebuilt
   the image so it refuses `REQUEST_PRESET` during a setlist download. `e775eab` also records the

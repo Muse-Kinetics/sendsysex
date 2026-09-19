@@ -14,7 +14,7 @@ It also carries the legacy bootloader-trojan install for pre-bootloader SoftStep
 **v0.15.0 is the current release** (macOS universal notarized `.pkg`, Windows signed zip). `main` has
 moved on since the tag (unreleased):
 
-- **Device database and payloads:** EM Pro family; SoftStep **2.0.8** and 12 Step **1.0.10**
+- **Device database and payloads:** EM Pro family; SoftStep **2.0.9** and 12 Step **1.1.0**
   defaults; per-family `requiresSignedCrc` / `usesLegacyTrailer` transport flags (SoftStep proven
   from captured bytes, 12 Step verified against its firmware source); `-f` payload override for
   `--fw-update`.
