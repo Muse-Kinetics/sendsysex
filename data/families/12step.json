@@ -5,7 +5,7 @@
   "name": "12 Step",
   "summary": "Covers original 12 Step hardware, the dedicated bootloader added in firmware 1.0.0, and the newer 12 Step2 hardware with named ports.",
   "discovery": {
-    "familyMarkers": ["12Step", "12 Step", "12 Step2", "12 Step Bootloader"],
+    "familyMarkers": ["12Step", "12 Step2", "12 Step Bootloader"],
     "safeProbeRoles": {
       "application": ["control_surface", "port1"],
       "bootloader": ["bootloader"]
@@ -162,8 +162,8 @@
       "id": "post_bootloader_application",
       "state": "application",
       "hardware": ["12step1"],
-      "firmware": { "minInclusive": "1.0.0" },
-      "productStrings": ["12 Step"],
+      "firmware": { "minInclusive": "1.0.0", "maxExclusive": "1.0.9" },
+      "productStrings": ["12Step"],
       "portLayout": {
         "style": "unnamed_ordered",
         "inputs": [

@@ -33,6 +33,7 @@
 #include "chunkedSysExTransfer.h"
 #include "bootloaderUpgrade.h"
 #include "bootloaderSend.h"
+#include "usbTopology.h"
 #include "version.h"
 
 namespace
@@ -1118,6 +1119,23 @@ static bool runLegacyVersionQuery(const std::string &familyId, std::string &vers
     return true;
 }
 
+// Prints where each of the family's devices is plugged in (Windows only).
+// Returns true if any of them is behind an external hub.
+static bool reportUsbConnection(const std::string &familyName)
+{
+    deviceDatabase db;
+    if (!db.loadFamily(familyName))
+        return false;
+    bool behindHub = false;
+    for (const usbTopology::Connection &c : usbTopology::find(db.getFamilyMarkers()))
+    {
+        std::cout << usbTopology::describe(c) << "\n";
+        if (!c.hubs.empty())
+            behindHub = true;
+    }
+    return behindHub;
+}
+
 int runIdentityRequest(const CliOptions &options)
 {
     if (options.familyName.empty())
@@ -1137,6 +1155,7 @@ int runIdentityRequest(const CliOptions &options)
     if (!options.appPortName.empty())
         device.setPortNameOverride(options.appPortName, options.bootloaderPortName);
 
+    reportUsbConnection(options.familyName);
     std::cout << "Waiting for " << options.familyName << " to appear...\n";
 
     for (unsigned int attempt = 0; attempt < 60; ++attempt)
@@ -1269,6 +1288,10 @@ int runAutomaticProcess(const CliOptions &options)
         idReplyTimeoutMs = familyFwDefaults.idReplyTimeoutMs;
     if (!options.idReplyResendAttemptsExplicit && familyFwDefaults.idReplyResendAttempts > 0U)
         idReplyResendAttempts = familyFwDefaults.idReplyResendAttempts;
+
+    if (reportUsbConnection(options.familyName))
+        std::cout << "WARNING: connected through a USB hub. If the update fails, retry with the device"
+                     " plugged straight into the computer.\n";
 
     if (!device.runAutomaticUpdate(options.chunkSize, chunkDelayMs, options.pollSeconds, postDelayMs, firstGapDelayMs, firstChunkSize, idReplyTimeoutMs, idReplyResendAttempts))
     {
@@ -1537,9 +1560,9 @@ int runBlSend(const CliOptions &options)
     if (!options.blDryRun && midiBackend::selectedApi() != RtMidi::WINDOWS_MIDI_SERVICES)
     {
         const std::string deviceLabel = options.familyName.empty() ? std::string("legacy") : options.familyName;
-        std::cout << "ERROR: the " << deviceLabel << " bootloader upgrade requires Windows MIDI Services. "
-                     "You may need to download and install the SDK from "
-                     "https://microsoft.github.io/MIDI/get-latest/, then try again.\n";
+        std::cout << "ERROR: the " << deviceLabel << " bootloader upgrade requires Windows MIDI Services, "
+                     "which isn't in use: " << midiBackend::whyNotWms()
+                  << "\nSee \"Windows MIDI Services\" in README.md.\n";
         return 1;
     }
 #endif
@@ -1839,9 +1862,9 @@ int runBootloaderInstall(const CliOptions &options)
     // the matching check in runBlSend() for why WMS is required on Windows.
     if (midiBackend::selectedApi() != RtMidi::WINDOWS_MIDI_SERVICES)
     {
-        std::cout << "ERROR: the " << options.familyName << " bootloader upgrade requires Windows MIDI Services. "
-                     "You may need to download and install the SDK from "
-                     "https://microsoft.github.io/MIDI/get-latest/, then try again.\n";
+        std::cout << "ERROR: the " << options.familyName << " bootloader upgrade requires Windows MIDI Services, "
+                     "which isn't in use: " << midiBackend::whyNotWms()
+                  << "\nSee \"Windows MIDI Services\" in README.md.\n";
         return 1;
     }
 #endif
@@ -1864,6 +1887,24 @@ int runBootloaderInstall(const CliOptions &options)
     }
     if (ver.empty())
         ver = "unknown";
+
+    // A hub can drop the device mid-install and leave it unbootable.
+    if (reportUsbConnection(fam))
+    {
+        std::cout << "\nWARNING: your " << famDisplay << " is connected through a USB hub. Hubs can drop"
+                     " the connection partway through the install, which can leave the device unusable."
+                     " Unplug it and connect it straight to a USB port on the computer, then run this"
+                     " again.\n\nTo continue through the hub anyway, type \"YES\": " << std::flush;
+        std::string viaHub;
+        std::getline(std::cin, viaHub);
+        log.logInput(viaHub);
+        if (trimUpper(viaHub) != "YES")
+        {
+            std::cout << "Aborted\n";
+            return 1;
+        }
+    }
+    std::cout << "\n";
 
     // 2) Warning + explicit consent gate.
     std::cout << "WARNING: your device is running legacy firmware version " << ver

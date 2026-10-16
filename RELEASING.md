@@ -15,13 +15,26 @@ Update the `Version` / `Last updated` line in `README.md` to match.
 
 ## 2. Build and stage
 
+The build machine needs `WindowsMidiServices_ROOT` set to the unpacked
+`Windows.Devices.Midi2` package of the current Windows MIDI Services preview
+(README.md, "Building with Windows MIDI Services"). Without it the script stops,
+since a WinMM-only build can't do the bootloader installs; `-AllowWinMMOnly`
+packages one anyway.
+
+Microsoft's "go live" terms for shipping the preview DLL (in each preview's
+[release notes](https://github.com/microsoft/MIDI/releases)): move to newer
+previews as they come out, drop the DLL once Windows includes the API (the
+November 2026 update), tell users the app uses a preview API (README.md does),
+and report problems on Microsoft's GitHub.
+
 ```powershell
 .\package-release.ps1
 ```
 
 This configures + builds Release (both WinMM and WMS backends compiled in),
-stages `SendSysEx.exe` alongside the `data/`, `syx/`, `README.md`, and
-`LICENSE` it needs at runtime, zips the result to
+stages `SendSysEx.exe` alongside Microsoft's `Windows.Devices.Midi2.dll` and
+`.pri` and the `data/`, `syx/`, `README.md`, and `LICENSE` it needs at
+runtime, zips the result to
 `dist/SendSysEx-vX.Y.Z-win-x64.zip`, and writes a `.sha256` checksum next to
 it. It prints the exact staged exe path and a `signtool` command to run next.
 

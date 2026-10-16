@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Configures and builds SendSysEx (Release, both WinMM and WMS backends),
-    stages the executable plus the runtime data/ and syx/ assets it needs at
-    runtime, then zips that folder and writes a .sha256 checksum next to it
-    under dist/ in the repo.
+    stages the executable plus the Windows MIDI Services DLL and the data/
+    and syx/ assets it needs at runtime, then zips that folder and writes a
+    .sha256 checksum next to it under dist/ in the repo.
 
     Staging and zipping happen in a temp directory OUTSIDE this repo, not in
     dist/ directly: this repo lives in a Dropbox-synced folder, and Dropbox
@@ -41,6 +41,12 @@
     Override on machines without VS2022 installed, e.g. -Generator
     "Visual Studio 16 2019".
 
+.PARAMETER AllowWinMMOnly
+    Package without Windows MIDI Services' Windows.Devices.Midi2.dll/.pri.
+    By default their absence is an error: the build wasn't configured with
+    WindowsMidiServices_ROOT (see README.md), and the exe would fall back to
+    WinMM, which the bootloader installs can't use.
+
 .EXAMPLE
     .\package-release.ps1
     Build + stage + zip an unsigned package.
@@ -54,7 +60,8 @@ param(
     [string]$OutputDir = "dist",
     [switch]$SkipBuild,
     [string]$CMakeExe = "cmake",
-    [string]$Generator = "Visual Studio 17 2022"
+    [string]$Generator = "Visual Studio 17 2022",
+    [switch]$AllowWinMMOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +114,21 @@ foreach ($item in @("data", "syx", "README.md", "LICENSE")) {
     $dest = Join-Path $stageDir $item
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
     Copy-Item -Recurse -Force $source $dest
+}
+
+# Windows MIDI Services runtime, copied next to the exe by the build. Microsoft
+# signs it; don't re-sign it.
+foreach ($file in @("Windows.Devices.Midi2.dll", "Windows.Devices.Midi2.pri")) {
+    $source = Join-Path $buildDir "$Configuration\$file"
+    $dest = Join-Path $stageDir $file
+    if (Test-Path $dest) { Remove-Item -Force $dest }
+    if (Test-Path $source) {
+        Copy-Item -Force $source $dest
+    } elseif ($AllowWinMMOnly) {
+        Write-Host "    $file not found; packaging WinMM only (-AllowWinMMOnly)." -ForegroundColor DarkYellow
+    } else {
+        throw "$file not found in $buildDir\$Configuration. Configure with WindowsMidiServices_ROOT (see README.md), or pass -AllowWinMMOnly."
+    }
 }
 
 $tempZipPath = Join-Path $env:TEMP "sendsysex-release-staging\$packageName.zip"

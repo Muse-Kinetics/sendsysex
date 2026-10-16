@@ -72,6 +72,7 @@ public:
     const std::string &getFamilyId() const;
     const std::string &getDisplayName() const;
     const std::string &getLastError() const;
+    const std::vector<std::string> &getFamilyMarkers() const { return familyMarkers_; }
 
     bool isSupportedFirmwareVersion(const version_t &version) const;
     bool getPayloadPath(const std::string &payloadType, const version_t *version, std::string &path,

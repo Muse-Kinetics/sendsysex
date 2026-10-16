@@ -10,7 +10,7 @@
     {
       "name": "windows-msvc",
       "displayName": "Windows MSVC x64",
-      "description": "Build with Visual Studio 2022 or Build Tools. Both WinMM and Windows MIDI Services (WMS) are compiled in; the backend is selected at runtime. Requires the Windows MIDI Services SDK (see README).",
+      "description": "Build with Visual Studio 2022 or Build Tools. WinMM, plus Windows MIDI Services (WMS) when WindowsMidiServices_ROOT points at Microsoft's Windows.Devices.Midi2 package (see README); the backend is selected at runtime.",
       "generator": "Visual Studio 17 2022",
       "architecture": {
         "value": "x64",

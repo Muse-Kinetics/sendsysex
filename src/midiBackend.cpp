@@ -47,18 +47,24 @@ Selection &mutableSelection()
     return s;
 }
 
+bool isCompiled(RtMidi::Api api)
+{
+    std::vector<RtMidi::Api> apis;
+    RtMidi::getCompiledApi(apis);
+    return std::find(apis.begin(), apis.end(), api) != apis.end();
+}
+
 Selection autoDetect()
 {
-#if defined(__WINDOWS_MIDI_SERVICES__) && defined(__WINDOWS_MM__)
+#if defined(_WIN32)
+    if (!isCompiled(RtMidi::WINDOWS_MIDI_SERVICES))
+        return Selection{RtMidi::WINDOWS_MM, "built with WinMM only", true};
     if (winmmForcedByEnv())
         return Selection{RtMidi::WINDOWS_MM, "KMI_MIDI_BACKEND=winmm set - forcing WinMM", true};
-    if (RtMidi::isWindowsMidiServicesAvailable())
-        return Selection{RtMidi::WINDOWS_MIDI_SERVICES, "Windows MIDI Services SDK detected", true};
-    return Selection{RtMidi::WINDOWS_MM, "Windows MIDI Services SDK not installed - falling back to WinMM", true};
-#elif defined(__WINDOWS_MIDI_SERVICES__)
-    return Selection{RtMidi::WINDOWS_MIDI_SERVICES, "built with Windows MIDI Services only", true};
-#elif defined(__WINDOWS_MM__)
-    return Selection{RtMidi::WINDOWS_MM, "built with WinMM only", true};
+    const RtMidi::RtMidiApiAvailability wms = RtMidi::checkApiAvailability(RtMidi::WINDOWS_MIDI_SERVICES);
+    if (wms.available)
+        return Selection{RtMidi::WINDOWS_MIDI_SERVICES, "Windows MIDI Services available", true};
+    return Selection{RtMidi::WINDOWS_MM, "using WinMM; Windows MIDI Services is unavailable: " + wms.message, true};
 #else
     // macOS / Linux: resolve the concrete compiled-in API rather than leaving it
     // UNSPECIFIED (which prints as "Unknown"). getCompiledApi() returns the
@@ -96,30 +102,26 @@ bool initialize(const std::string &forcedBackend, std::string &errorMessage)
 
     if (requested == "winmm")
     {
-#if defined(__WINDOWS_MM__)
         mutableSelection() = Selection{RtMidi::WINDOWS_MM, "--midi-backend winmm forced", true};
         return true;
-#else
-        errorMessage = "This build was not compiled with WinMM support.";
-        return false;
-#endif
     }
 
     if (requested == "wms")
     {
-#if defined(__WINDOWS_MIDI_SERVICES__)
-        if (!RtMidi::isWindowsMidiServicesAvailable())
+        if (!isCompiled(RtMidi::WINDOWS_MIDI_SERVICES))
         {
-            errorMessage = "--midi-backend wms was requested, but the Windows MIDI Services SDK "
-                            "runtime is not installed/running on this machine.";
+            errorMessage = "This build was not compiled with Windows MIDI Services support.";
+            return false;
+        }
+        const RtMidi::RtMidiApiAvailability wms = RtMidi::checkApiAvailability(RtMidi::WINDOWS_MIDI_SERVICES);
+        if (!wms.available)
+        {
+            errorMessage = "--midi-backend wms was requested, but Windows MIDI Services is not available: " +
+                           wms.message;
             return false;
         }
         mutableSelection() = Selection{RtMidi::WINDOWS_MIDI_SERVICES, "--midi-backend wms forced", true};
         return true;
-#else
-        errorMessage = "This build was not compiled with Windows MIDI Services support.";
-        return false;
-#endif
     }
 
     errorMessage = "Invalid --midi-backend value '" + forcedBackend + "'. Use 'winmm' or 'wms'.";
@@ -139,6 +141,16 @@ std::string describeSelectedApi()
 {
     selectedApi(); // ensure mutableSelection() is populated
     return RtMidi::getApiDisplayName(selectedApi()) + " (" + mutableSelection().reason + ")";
+}
+
+std::string whyNotWms()
+{
+    if (!isCompiled(RtMidi::WINDOWS_MIDI_SERVICES))
+        return "this build of SendSysEx does not include it.";
+    const RtMidi::RtMidiApiAvailability wms = RtMidi::checkApiAvailability(RtMidi::WINDOWS_MIDI_SERVICES);
+    if (!wms.available)
+        return wms.message;
+    return "WinMM was selected (--midi-backend winmm or KMI_MIDI_BACKEND=winmm).";
 }
 
 namespace

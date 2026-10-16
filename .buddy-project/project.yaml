@@ -7,6 +7,7 @@ description: >-
   sysex-send-flowcontrol).
 repository: git@github.com:Muse-Kinetics/sendsysex.git
 status: active
+visibility: public
 phase: post-v0.15.0 — unreleased maintenance (device database, payloads, RtMidi WinMM fixes)
 owner: Eric Bateman <eric@musekinetics.com>
 responsible_buddy: SiliconDreams

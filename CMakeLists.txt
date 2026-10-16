@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 
 project(SendSysEx
-    VERSION 0.15.0
+    VERSION 1.0.0
     DESCRIPTION "Command-line MIDI SysEx sender"
     LANGUAGES CXX
 )
@@ -19,21 +19,15 @@ if(NOT EXISTS "${RTMIDI_DIR}/RtMidi.cpp")
     )
 endif()
 
-# Build rtmidi via its own CMakeLists.txt (the Muse-Kinetics WMS fork, pinned
-# in inc/rtmidi) rather than compiling RtMidi.cpp directly here. That
-# CMakeLists.txt already knows how to detect the Windows MIDI Services (WMS)
-# SDK and generate its C++/WinRT projection; duplicating that here would just
-# drift out of sync with it.
+# rtmidi's own CMakeLists.txt builds the WMS backend and its C++/WinRT projection.
 set(RTMIDI_BUILD_SHARED_LIBS OFF CACHE BOOL "Build rtmidi as a static library" FORCE)
 set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "Skip rtmidi's own test executables" FORCE)
 
 if(WIN32)
-    # Compile both backends in; the CLI selects one at runtime (see
-    # midiBackend.cpp): WMS if its SDK runtime is installed, WinMM otherwise.
-    # This mirrors the SoftStep editors (shared/KMI_MDM/KMI_ports.cpp).
+    # WinMM always, plus WMS when found; midiBackend.cpp picks one at runtime.
     set(RTMIDI_API_WINMM ON CACHE BOOL "Compile with WinMM support" FORCE)
-    set(RTMIDI_API_WMS ON CACHE BOOL "Compile with Windows MIDI Services support" FORCE)
 endif()
+include(${CMAKE_SOURCE_DIR}/cmake/WindowsMidiServices.cmake)
 
 add_subdirectory(${RTMIDI_DIR} rtmidi-build EXCLUDE_FROM_ALL)
 
@@ -49,6 +43,7 @@ add_executable(SendSysEx
     src/deviceDatabase.cpp
     src/midiBackend.cpp
     src/bootloaderUpgrade.cpp
+    src/usbTopology.cpp
     ${MIDI_CPP_DIR}/src/MIDI_sysex.cpp
     ${MIDI_CPP_DIR}/src/MIDI_bytestream_parser.cpp
     ${MIDI_CPP_DIR}/src/MIDI_device_metadata.cpp
@@ -62,12 +57,12 @@ target_include_directories(SendSysEx PRIVATE
 )
 
 target_link_libraries(SendSysEx PRIVATE rtmidi)
-
 if(WIN32)
-    # RtMidi.h gates its WMS-specific declarations (e.g.
-    # isWindowsMidiServicesAvailable()) behind these same macros, so every
-    # translation unit that includes it - not just rtmidi's own - needs them.
-    target_compile_definitions(SendSysEx PRIVATE __WINDOWS_MM__ __WINDOWS_MIDI_SERVICES__)
+    target_link_libraries(SendSysEx PRIVATE cfgmgr32) # usbTopology.cpp
 endif()
+kmi_wms_bundle_runtime(SendSysEx)
 
 install(TARGETS SendSysEx RUNTIME DESTINATION bin)
+if(KMI_WMS_RUNTIME_FILES)
+    install(FILES ${KMI_WMS_RUNTIME_FILES} DESTINATION bin)
+endif()
