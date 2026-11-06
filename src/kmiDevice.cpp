@@ -138,12 +138,14 @@ bool kmiDevice::refreshPorts()
         }
     }
 
-    if (!scanPorts(visibleInputPorts_, visibleOutputPorts_, &lastError_))
+    std::map<std::string, std::vector<std::string>> otherNames;
+    if (!scanPorts(visibleInputPorts_, visibleOutputPorts_, otherNames, &lastError_))
     {
         closeCommsPorts();
         state_ = State::disconnected;
         return false;
     }
+    database_.setOtherPortNames(otherNames);
 
     // Tell the database which backend is active so it can apply the correct
     // port-name normalization strategy.
@@ -805,6 +807,7 @@ void kmiDevice::printIdentityMetadata() const
 
 bool kmiDevice::scanPorts(std::vector<std::string> &inputPorts,
                           std::vector<std::string> &outputPorts,
+                          std::map<std::string, std::vector<std::string>> &otherNames,
                           std::string *errorMessage) const
 {
     try
@@ -812,13 +815,24 @@ bool kmiDevice::scanPorts(std::vector<std::string> &inputPorts,
         RtMidiIn tempIn(midiBackend::selectedApi());
         tempIn.ignoreTypes(false, false, false);
         const unsigned int numInPorts = tempIn.getPortCount();
+        // Index i stays RtMidi port i, so an unnamed port is kept as "".
         for (unsigned int i = 0; i < numInPorts; ++i)
-            inputPorts.push_back(tempIn.getPortName(i));
+        {
+            const std::vector<std::string> names = tempIn.getPortNames(i);
+            inputPorts.push_back(names.empty() ? std::string() : names[0]);
+            if (names.size() > 1)
+                otherNames[names[0]].assign(names.begin() + 1, names.end());
+        }
 
         RtMidiOut tempOut(midiBackend::selectedApi());
         const unsigned int numOutPorts = tempOut.getPortCount();
         for (unsigned int i = 0; i < numOutPorts; ++i)
-            outputPorts.push_back(tempOut.getPortName(i));
+        {
+            const std::vector<std::string> names = tempOut.getPortNames(i);
+            outputPorts.push_back(names.empty() ? std::string() : names[0]);
+            if (names.size() > 1)
+                otherNames[names[0]].assign(names.begin() + 1, names.end());
+        }
     }
     catch (RtMidiError &error)
     {

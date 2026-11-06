@@ -694,7 +694,39 @@ std::string deviceDatabase::normalizeWindowsMidiServices(const std::string &raw)
 // ---------------------------------------------------------------------------
 // Public dispatch entry point
 // ---------------------------------------------------------------------------
+bool deviceDatabase::isKnownPort(const std::string &normalizedName) const
+{
+    for (std::size_t i = 0; i < knownPorts_.size(); ++i)
+        if (knownPorts_[i].normalizedName == normalizedName)
+            return true;
+    return false;
+}
+
 std::string deviceDatabase::normalizePortName(const std::string &rawPortName) const
+{
+    const std::string shown = normalizeShownPortName(rawPortName);
+    if (isKnownPort(shown))
+        return shown;
+
+    // Windows shows classic or new-style names depending on a setting, or a name
+    // the user chose; the others still identify the port. They carry no WinMM
+    // index, so a classic one has the UWP shape and a new-style one the WMS shape.
+    const std::map<std::string, std::vector<std::string>>::const_iterator others = otherPortNames_.find(rawPortName);
+    if (others != otherPortNames_.end())
+        for (const std::string &name : others->second)
+        {
+            const std::string newStyle = normalizeWindowsMidiServices(name);
+            if (isKnownPort(newStyle))
+                return newStyle;
+            const std::string classic = normalizeWinUWP(name);
+            if (isKnownPort(classic))
+                return classic;
+        }
+
+    return shown;
+}
+
+std::string deviceDatabase::normalizeShownPortName(const std::string &rawPortName) const
 {
     switch (activeApi_)
     {
@@ -871,6 +903,11 @@ void deviceDatabase::addPortByIndex(const std::string &productStringLower, int d
 void deviceDatabase::setActiveApi(RtMidi::Api api)
 {
     activeApi_ = api;
+}
+
+void deviceDatabase::setOtherPortNames(const std::map<std::string, std::vector<std::string>> &otherNames)
+{
+    otherPortNames_ = otherNames;
 }
 
 std::string deviceDatabase::lookupByIndex(const std::string &productStringLower, int devicePortIndex) const

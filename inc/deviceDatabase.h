@@ -1,6 +1,7 @@
 #ifndef DEVICE_DATABASE_H
 #define DEVICE_DATABASE_H
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -68,6 +69,8 @@ public:
     bool isLoaded() const;
 
     void setActiveApi(RtMidi::Api api);
+    // Shown port name -> the port's other names (RtMidi getPortNames()).
+    void setOtherPortNames(const std::map<std::string, std::vector<std::string>> &otherNames);
 
     const std::string &getFamilyId() const;
     const std::string &getDisplayName() const;
@@ -127,6 +130,9 @@ private:
     // prefix. Kept separate so the macOS path stays untouched.
     std::string normalizeWindowsMidiServices(const std::string &raw) const;
     std::string normalizeAlsa(const std::string &raw) const;
+    // The shown name through the active backend's parser.
+    std::string normalizeShownPortName(const std::string &rawPortName) const;
+    bool isKnownPort(const std::string &normalizedName) const;
 
     // Resolve a (productStringLower, 1-based devicePortIndex) pair to a canonical name.
     // Falls back to productStringLower + " port " + index if the index entry is unknown.
@@ -142,6 +148,7 @@ private:
     int bootloaderPidMsb_;
     std::string versionEncoding_;
     RtMidi::Api activeApi_;
+    std::map<std::string, std::vector<std::string>> otherPortNames_;
     std::vector<std::string> familyMarkers_;
     std::vector<std::string> safeProbeApplicationRoles_;
     std::vector<std::string> safeProbeBootloaderRoles_;

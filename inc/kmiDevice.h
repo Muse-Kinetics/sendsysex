@@ -2,6 +2,7 @@
 #define KMI_DEVICE_H
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -109,6 +110,7 @@ public:
 private:
     bool scanPorts(std::vector<std::string> &inputPorts,
                    std::vector<std::string> &outputPorts,
+                   std::map<std::string, std::vector<std::string>> &otherNames,
                    std::string *errorMessage) const;
     bool ensureCommsPortsForState();
     void closeCommsPorts();

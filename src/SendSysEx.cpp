@@ -345,16 +345,28 @@ void printBootloaderHelp()
         << "  SendSysEx --bl-send -f Softstep-99-trojan.syx --family SoftStep --verify\n\n";
 }
 
+// "Name  (also "Other", ...)": the port's other names, where the system has any.
+std::string describePortNames(const std::vector<std::string> &names)
+{
+    if (names.empty())
+        return std::string();
+
+    std::string text = names[0];
+    for (std::size_t i = 1; i < names.size(); ++i)
+        text += (i == 1 ? "  (also \"" : ", \"") + names[i] + "\"";
+    return names.size() > 1 ? text + ")" : text;
+}
+
 void listPorts(RtMidiOut &midiOut)
 {
     RtMidiIn midiIn(midiBackend::selectedApi());
     const unsigned int numInPorts = midiIn.getPortCount();
     for (unsigned int i = 0; i < numInPorts; ++i)
-        std::cout << "MIDI Input  Port " << i << ": " << midiIn.getPortName(i) << "\n";
+        std::cout << "MIDI Input  Port " << i << ": " << describePortNames(midiIn.getPortNames(i)) << "\n";
 
     const unsigned int numOutPorts = midiOut.getPortCount();
     for (unsigned int i = 0; i < numOutPorts; ++i)
-        std::cout << "MIDI Output Port " << i << ": " << midiOut.getPortName(i) << "\n";
+        std::cout << "MIDI Output Port " << i << ": " << describePortNames(midiOut.getPortNames(i)) << "\n";
 }
 
 void listNormalizedPorts(const std::string &familyName)
